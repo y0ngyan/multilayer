@@ -51,17 +51,6 @@ public:
                                          occupancy_value_(value) {
         // 初始不分配子体素内存，按需分配
     }
-    
-    // 懒加载方式分配子体素
-    void allocate_subvoxels(unsigned int total_subvoxels) {
-        if (!is_subvoxel_allocated_) {
-            subvoxel_values_.resize(total_subvoxels, 0.0f); // 默认初始化为0
-            for(unsigned int i = 0; i < total_subvoxels; ++i) {
-                subvoxel_values_[i] = 0.0f;
-            }
-            is_subvoxel_allocated_ = true;
-        }
-    }
 
     void allocate_subvoxels(unsigned int total_subvoxels, const float value) {
         if (!is_subvoxel_allocated_) {
@@ -84,14 +73,6 @@ public:
     // 检查体素是否空闲
     bool is_free() const {
         return is_free_;
-    }
-    
-    // 获取子体素概率引用
-    float& get_subvoxel_value(unsigned int local_idx, unsigned int total_subvoxels) {
-        if (!is_subvoxel_allocated_) {
-            allocate_subvoxels(total_subvoxels);
-        }
-        return subvoxel_values_[local_idx];
     }
 };
 
@@ -119,17 +100,6 @@ public:
             }
         }
     }
-    
-    // 懒加载方式分配体素数组
-    void allocate_voxels(unsigned int total_voxels) {
-    if (!is_voxel_allocated_) {
-        voxels_.resize(total_voxels, nullptr);
-        for (unsigned int i = 0; i < total_voxels; ++i) {
-            voxels_[i] = new Voxel(0.0f);
-        }
-        is_voxel_allocated_ = true;
-    }
-}
 
     void allocate_voxels(unsigned int total_voxels, const float value) {
         if (!is_voxel_allocated_) {
@@ -138,29 +108,6 @@ public:
                 voxels_[i] = new Voxel(value);
             }
             is_voxel_allocated_ = true;
-        }
-    }
-
-        // 分配单个体素
-    void allocate_voxel(unsigned int local_idx, unsigned int total_subvoxels) {
-        if (!is_voxel_allocated_) {
-            voxels_.resize(total_subvoxels, nullptr);
-            is_voxel_allocated_ = true;
-        }
-        
-        if (voxels_[local_idx] == nullptr) {
-            voxels_[local_idx] = new Voxel(0.0f);
-        }
-    }
-
-    void allocate_voxel(unsigned int local_idx, unsigned int total_subvoxels, float value) {
-        if (!is_voxel_allocated_) {
-            voxels_.resize(total_subvoxels, nullptr);
-            is_voxel_allocated_ = true;
-        }
-        
-        if (voxels_[local_idx] == nullptr) {
-            voxels_[local_idx] = new Voxel(value);
         }
     }
     
@@ -173,22 +120,18 @@ public:
     bool is_voxel_allocated(unsigned int local_idx) const {
         return is_voxel_allocated_ && voxels_[local_idx] != nullptr;
     }
-    
-    // 释放体素
-    void free_voxel(unsigned int local_idx) {
-        if (is_voxel_allocated(local_idx)) {
-            delete voxels_[local_idx];
-            voxels_[local_idx] = nullptr;
+
+     // 释放所有体素
+    void free_all_voxels() {
+        if (is_voxel_allocated_) {
+            for (size_t i = 0; i < voxels_.size(); ++i) {
+                if (voxels_[i] != nullptr) {
+                    delete voxels_[i];
+                    voxels_[i] = nullptr;
+                }
+            }
+            is_voxel_allocated_ = false;
         }
-    }
-    
-    // 获取体素引用
-    // todo
-    Voxel& get_voxel(unsigned int local_idx, unsigned int total_subvoxels) {
-        if (!is_voxel_allocated(local_idx)) {
-            allocate_voxel(local_idx, total_subvoxels);
-        }
-        return *voxels_[local_idx];
     }
 };
 
@@ -200,12 +143,10 @@ private:
     // 存储不同层级体素的数据结构
     struct LayerVoxel {
         Eigen::Vector3d position;  // 体素中心位置
-        float size;                // 体素尺寸
-        float occupancy_value;     // 占据值
         LayerType layer;           // 层级类型
-        
-        LayerVoxel(const Eigen::Vector3d& pos, float sz, float occ, LayerType lyr)
-            : position(pos), size(sz), occupancy_value(occ), layer(lyr) {}
+
+        LayerVoxel(const Eigen::Vector3d& pos, LayerType lyr)
+            : position(pos), layer(lyr) {}
     };
 
     std::vector<LayerVoxel> new_occupied_voxels_;   // 新占据的多层级体素
@@ -311,7 +252,9 @@ private:
     void switchLayerWithProject(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
-                          const Eigen::Vector3d& T_W_2_C);
+                          const Eigen::Vector3d& T_W_2_C,
+                          std::vector<LayerVoxel>& layer_change_freed,
+                          std::vector<LayerVoxel>& layer_change_occupied);
     void switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
@@ -340,6 +283,11 @@ private:
     void updateOccupancyValue(float &value, bool &is_free, float update);
     // 收集不同层级的体素
     void collectMultiLayerVoxels();
+    void recordLayerInfo(Block* block, 
+                             const Eigen::Vector3i& block_grid_idx, 
+                             const Eigen::Vector3d& block_center, 
+                             LayerType layer_type, 
+                             std::vector<LayerVoxel>& layer_change_);
 
 public:
     SOGMMap();
@@ -390,6 +338,7 @@ public:
     void subVoxelIdxToWorld(const Eigen::Vector3i& subvoxel_idx, Eigen::Vector3d& pos) const;
     void voxelIdxToWorld(const Eigen::Vector3i& voxel_idx, Eigen::Vector3d& pos) const;
     void blockIdxToWorld(const Eigen::Vector3i& block_idx, Eigen::Vector3d& pos) const;
+    void blockIdxToWorldWithoutHalf(const Eigen::Vector3i& block_idx, Eigen::Vector3d& pos) const;
 
     // 线性索引转换
     void subVoxelIdxToLocalLinear(const Eigen::Vector3i& subvoxel_idx, int& local_linear_idx) const;

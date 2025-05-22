@@ -1,13 +1,13 @@
 %YAML:1.2
 ---
 OccMap:
-  resolution: 0.1 # (unit: m)
+  resolution: 0.025 # (unit: m)
   map_x: 20 # (unit: m)
   map_y: 20 # (unit: m)
   map_z: 5 # (unit: m)
-  voxel_depth: 1
-  block_depth: 2
-  near_distance_threshold: 4.0
+  voxel_depth: 3
+  block_depth: 4
+  near_distance_threshold: 2.5
   far_distance_threshold: 8.0
 
 Probability:
@@ -47,8 +47,8 @@ DepthCamera:
   depth_mindist: 0.1
   depth_filter_margin: 20
   skip_pixel: 4
-  min_valid_ratio: 0.6
-  depth_threshold_subvoxel: 0.1           # 体素z距离与像素平均值距离比较阈值
+  min_valid_ratio: 0.5
+  depth_threshold_subvoxel: 0.05           # 体素z距离与像素平均值距离比较阈值
   depth_threshold_voxel: 0.2            # 体素z距离与体素平均值距离比较阈值
   depth_threshold_block: 0.2            # 体素z距离与体素平均值距离比较阈值
 

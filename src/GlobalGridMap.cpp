@@ -11,45 +11,6 @@
 
 #include "GlobalGridMap.hpp"
 
-int GlobalGridMap::getSize()
-{
-    return GlPoints_.size();
-}
-
-void GlobalGridMap::addPoint(pcl::PointXYZ pt)
-{
-    GlPoints_.insert(pt);
-}
-
-void GlobalGridMap::addPoints(pcl::PointCloud<pcl::PointXYZ> *ptsPtr)
-{
-    for (std::size_t i = 0; i < ptsPtr->size(); i++)
-        GlPoints_.insert(ptsPtr->at(i));
-}
-
-void GlobalGridMap::erasePoint(pcl::PointXYZ pt)
-{
-    GlPoints_.erase(pt);
-}
-
-void GlobalGridMap::erasePoints(pcl::PointCloud<pcl::PointXYZ> *ptsPtr)
-{
-    for (std::size_t i = 0; i < ptsPtr->size(); i++)
-        GlPoints_.erase(ptsPtr->at(i));
-}
-
-pcl::PointCloud<pcl::PointXYZ> GlobalGridMap::getMapAll()
-{
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-    std::set<pcl::PointXYZ, comp>::iterator itr;
-    for (itr = GlPoints_.begin(); itr != GlPoints_.end(); itr++)
-    {
-        cloud.push_back(*itr);
-    }
-
-    return cloud;
-}
-
 // 通过获取当前时间生成文件名，
 // 并将全局网格地图中的点云数据保存为 PLY 文件，
 // 从而实现了保存地图的功能。
@@ -61,30 +22,39 @@ bool GlobalGridMap::saveMap()
     std::string stCurrentTime = chCurrentTime;
     std::string filename = stCurrentTime + "GridMap" + ".ply";
 
-    pcl::PointCloud<pcl::PointXYZ>
-        cloud = getMapAll();
-    pcl::io::savePLYFile(filename, cloud);
+    pcl::PointCloud<pcl::PointXYZRGB> block_cloud, voxel_cloud, subvoxel_cloud;
+    getMultiResMapCloud(block_cloud, voxel_cloud, subvoxel_cloud);
+    pcl::io::savePLYFile(filename, block_cloud);
+    pcl::io::savePLYFile(filename, voxel_cloud);
+    pcl::io::savePLYFile(filename, subvoxel_cloud);
 
     return true;
 }
 
 void GlobalGridMap::init(ros::NodeHandle &nh)
 {
-    new_occ_sub_ = nh.subscribe("/map/new_occ", 1, &GlobalGridMap::newOccCallback, this);
-    new_free_sub_ = nh.subscribe("/map/new_free", 10, &GlobalGridMap::newFreeCallback, this);
     save_map_sub_ = nh.subscribe("/map/save", 1, &GlobalGridMap::saveMapCallback, this);
 
+    // 配置同步订阅
+    multi_res_occ_sub_sync_.reset(new message_filters::Subscriber<multilayer::VoxelGridMsgArray>(nh, "/map/multi_res_occ", 10));
+    multi_res_free_sub_sync_.reset(new message_filters::Subscriber<multilayer::VoxelGridMsgArray>(nh, "/map/multi_res_free", 10));
+    
+    // 创建同步器，设置队列大小为10
+    sync_voxel_grids_.reset(new message_filters::Synchronizer<SyncPolicyVoxelGrids>(
+        SyncPolicyVoxelGrids(10), *multi_res_occ_sub_sync_, *multi_res_free_sub_sync_));
+    
+    // 注册同步回调
+    sync_voxel_grids_->registerCallback(boost::bind(&GlobalGridMap::syncVoxelGridsCallback, this, _1, _2));
+
     // 多分辨率
-    multi_res_occ_sub_ = nh.subscribe("/map/multi_res_occ", 1, &GlobalGridMap::multiResOccCallback, this);
-    multi_res_free_sub_ = nh.subscribe("/map/multi_res_free", 10, &GlobalGridMap::multiResFreeCallback, this);
+    // multi_res_occ_sub_ = nh.subscribe("/map/multi_res_occ", 10, &GlobalGridMap::multiResOccCallback, this);
+    // multi_res_free_sub_ = nh.subscribe("/map/multi_res_free", 10, &GlobalGridMap::multiResFreeCallback, this);
     multi_res_map_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/map/multi_res_global", 10);
 
     // 添加分层级发布器
     block_layer_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/map/layer/block", 10);
     voxel_layer_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/map/layer/voxel", 10);
     subvoxel_layer_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/map/layer/subvoxel", 10);
-
-    glmap_pub_ = nh.advertise<sensor_msgs::PointCloud2>("/map/occupancy/global", 10);
 
     vis_timer_ = nh.createTimer(ros::Duration(0.1), &GlobalGridMap::visCallback, this);
 
@@ -96,112 +66,173 @@ void GlobalGridMap::init(ros::NodeHandle &nh)
     std::cout << "[GLOBAL MAP] init" << std::endl;
 }
 
-// 接收到新的占据点云数据后，调用 addPoints() 函数，
-// 将新的占据点云数据添加到全局网格地图中。
-void GlobalGridMap::newOccCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
+// 同步回调函数实现
+void GlobalGridMap::syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayConstPtr& occ_msg,
+                                           const multilayer::VoxelGridMsgArrayConstPtr& free_msg)
 {
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-    pcl::fromROSMsg(*msg, cloud);
-
-    addPoints(&cloud);
-}
-
-// 接收到新的自由点云数据后，调用 erasePoints() 函数，
-// 将新的自由点云数据从全局网格地图中删除。
-void GlobalGridMap::newFreeCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
-{
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-    pcl::fromROSMsg(*msg, cloud);
-
-    erasePoints(&cloud);
-}
-
-// 处理多分辨率占据体素的回调
-void GlobalGridMap::multiResOccCallback(const multilayer::VoxelGridMsgArrayConstPtr& msg) {
-    std::vector<MultiResVoxel> blocks;
-    std::vector<MultiResVoxel> voxels;
-    std::vector<MultiResVoxel> subvoxels;
-    blocks.reserve(msg->voxels.size());
-    voxels.reserve(msg->voxels.size());
-    subvoxels.reserve(msg->voxels.size());
+    // 处理占据体素
+    std::vector<MultiResVoxel> occ_blocks;
+    std::vector<MultiResVoxel> occ_voxels;
+    std::vector<MultiResVoxel> occ_subvoxels;
+    occ_blocks.reserve(occ_msg->voxels.size());
+    occ_voxels.reserve(occ_msg->voxels.size());
+    occ_subvoxels.reserve(occ_msg->voxels.size());
     
-    for (const auto& voxel_msg : msg->voxels) {
-        MultiResVoxel block;
-        MultiResVoxel voxel;
-        MultiResVoxel subvoxel;
-
-        switch (voxel_msg.layer) {
-            case 0: // BLOCK
-                block.layer = voxel_msg.layer;
-                block.center.x = voxel_msg.position.x;
-                block.center.y = voxel_msg.position.y;
-                block.center.z = voxel_msg.position.z;
-                block.size = voxel_msg.size;
-                block.occupancy = voxel_msg.occupancy_value;
-                blocks.push_back(block);
-                break;
-            case 1: // VOXEL
-                voxel.layer = voxel_msg.layer;
-                voxel.center.x = voxel_msg.position.x;
-                voxel.center.y = voxel_msg.position.y;
-                voxel.center.z = voxel_msg.position.z;
-                voxel.size = voxel_msg.size;
-                voxel.occupancy = voxel_msg.occupancy_value;
-                voxels.push_back(voxel);
-                break;
-            case 2: // SUBVOXEL
-                subvoxel.layer = voxel_msg.layer;
-                subvoxel.center.x = voxel_msg.position.x;
-                subvoxel.center.y = voxel_msg.position.y;
-                subvoxel.center.z = voxel_msg.position.z;
-                subvoxel.size = voxel_msg.size;
-                subvoxel.occupancy = voxel_msg.occupancy_value;
-                subvoxels.push_back(subvoxel);
-                break;
-            default:
-                break;
-        }
-    }
+    // 创建占据体素查找集合，用于快速判断是否存在相同体素
+    std::unordered_set<MultiResVoxel, MultiResVoxelHash> occ_block_set;
+    std::unordered_set<MultiResVoxel, MultiResVoxelHash> occ_voxel_set;
+    std::unordered_set<MultiResVoxel, MultiResVoxelHash> occ_subvoxel_set;
     
-    addMultiResVoxels(blocks, voxels, subvoxels);
-}
-
-// 处理多分辨率空闲体素的回调
-void GlobalGridMap::multiResFreeCallback(const multilayer::VoxelGridMsgArrayConstPtr& msg) {
-    std::vector<MultiResVoxel> blocks;
-    std::vector<MultiResVoxel> voxels;
-    std::vector<MultiResVoxel> subvoxels;
-    blocks.reserve(msg->voxels.size());
-    voxels.reserve(msg->voxels.size());
-    subvoxels.reserve(msg->voxels.size());
-    
-    for (const auto& voxel_msg : msg->voxels) {
+    // 处理所有占据体素，同时构建查找集合
+    for (const auto& voxel_msg : occ_msg->voxels) {
         MultiResVoxel voxel;
         voxel.center.x = voxel_msg.position.x;
         voxel.center.y = voxel_msg.position.y;
         voxel.center.z = voxel_msg.position.z;
-        voxel.size = voxel_msg.size;
-        voxel.occupancy = voxel_msg.occupancy_value;
-        voxel.layer = voxel_msg.layer;
+        
+        // 添加到查找集合
+        // occ_voxel_set.insert(voxel);
         
         // 根据层级分类
         switch (voxel_msg.layer) {
             case 0: // BLOCK
-                blocks.push_back(voxel);
+                occ_blocks.push_back(voxel);
+                occ_block_set.insert(voxel);
                 break;
             case 1: // VOXEL
-                voxels.push_back(voxel);
+                occ_voxels.push_back(voxel);
+                occ_voxel_set.insert(voxel);
                 break;
             case 2: // SUBVOXEL
-                subvoxels.push_back(voxel);
+                occ_subvoxels.push_back(voxel);
+                occ_subvoxel_set.insert(voxel);
                 break;
             default:
                 break;
         }
     }
-
-    removeMultiResVoxels(blocks, voxels, subvoxels);
+    
+    // 处理空闲体素
+    std::vector<MultiResVoxel> free_blocks;
+    std::vector<MultiResVoxel> free_voxels;
+    std::vector<MultiResVoxel> free_subvoxels;
+    free_blocks.reserve(free_msg->voxels.size());
+    free_voxels.reserve(free_msg->voxels.size());
+    free_subvoxels.reserve(free_msg->voxels.size());
+    
+    // 处理所有空闲体素，但排除与占据体素相同的体素
+    for (const auto& voxel_msg : free_msg->voxels) {
+        MultiResVoxel voxel;
+        voxel.center.x = voxel_msg.position.x;
+        voxel.center.y = voxel_msg.position.y;
+        voxel.center.z = voxel_msg.position.z;
+        // voxel.layer = voxel_msg.layer;
+        
+        // 如果在占据体素集合中找到相同的体素，则跳过
+        // if (occ_voxel_set.find(voxel) != occ_voxel_set.end()) {
+        //     continue;
+        // }
+        
+        // 根据层级分类
+        switch (voxel_msg.layer) {
+            case 0: // BLOCK
+                if (occ_block_set.find(voxel) != occ_block_set.end()) {
+                    continue;
+                }
+                free_blocks.push_back(voxel);
+                break;
+            case 1: // VOXEL
+                if (occ_voxel_set.find(voxel) != occ_voxel_set.end()) {
+                    continue;
+                }
+                free_voxels.push_back(voxel);
+                break;
+            case 2: // SUBVOXEL
+                if (occ_subvoxel_set.find(voxel) != occ_subvoxel_set.end()) {
+                    continue;
+                }
+                free_subvoxels.push_back(voxel);
+                break;
+            default:
+                break;
+        }
+    }
+    
+    // 先添加占据体素，再移除空闲体素
+    addMultiResVoxels(occ_blocks, occ_voxels, occ_subvoxels);
+    removeMultiResVoxels(free_blocks, free_voxels, free_subvoxels);
+    
+    // std::cout << "[GLOBAL MAP] Synchronized update - Occ: " << occ_msg->voxels.size() 
+    //           << ", Free: " << free_msg->voxels.size() << std::endl;
 }
+
+// // 处理多分辨率占据体素的回调
+// void GlobalGridMap::multiResOccCallback(const multilayer::VoxelGridMsgArrayConstPtr& msg) {
+//     std::vector<MultiResVoxel> blocks;
+//     std::vector<MultiResVoxel> voxels;
+//     std::vector<MultiResVoxel> subvoxels;
+//     blocks.reserve(msg->voxels.size());
+//     voxels.reserve(msg->voxels.size());
+//     subvoxels.reserve(msg->voxels.size());
+    
+//     for (const auto& voxel_msg : msg->voxels) {
+//         MultiResVoxel voxel;
+//         voxel.center.x = voxel_msg.position.x;
+//         voxel.center.y = voxel_msg.position.y;
+//         voxel.center.z = voxel_msg.position.z;
+
+//         switch (voxel_msg.layer) {
+//             case 0: // BLOCK
+//                 blocks.push_back(voxel);
+//                 break;
+//             case 1: // VOXEL
+//                 voxels.push_back(voxel);
+//                 break;
+//             case 2: // SUBVOXEL
+//                 subvoxels.push_back(voxel);
+//                 break;
+//             default:
+//                 break;
+//         }
+//     }
+    
+//     addMultiResVoxels(blocks, voxels, subvoxels);
+// }
+
+// // 处理多分辨率空闲体素的回调
+// void GlobalGridMap::multiResFreeCallback(const multilayer::VoxelGridMsgArrayConstPtr& msg) {
+//     std::vector<MultiResVoxel> blocks;
+//     std::vector<MultiResVoxel> voxels;
+//     std::vector<MultiResVoxel> subvoxels;
+//     blocks.reserve(msg->voxels.size());
+//     voxels.reserve(msg->voxels.size());
+//     subvoxels.reserve(msg->voxels.size());
+    
+//     for (const auto& voxel_msg : msg->voxels) {
+//         MultiResVoxel voxel;
+//         voxel.center.x = voxel_msg.position.x;
+//         voxel.center.y = voxel_msg.position.y;
+//         voxel.center.z = voxel_msg.position.z;
+//         // voxel.layer = voxel_msg.layer;
+        
+//         // 根据层级分类
+//         switch (voxel_msg.layer) {
+//             case 0: // BLOCK
+//                 blocks.push_back(voxel);
+//                 break;
+//             case 1: // VOXEL
+//                 voxels.push_back(voxel);
+//                 break;
+//             case 2: // SUBVOXEL
+//                 subvoxels.push_back(voxel);
+//                 break;
+//             default:
+//                 break;
+//         }
+//     }
+
+//     removeMultiResVoxels(blocks, voxels, subvoxels);
+// }
 
 // 添加多个多分辨率体素
 void GlobalGridMap::addMultiResVoxels(const std::vector<MultiResVoxel>& blocks,
@@ -215,6 +246,7 @@ void GlobalGridMap::addMultiResVoxels(const std::vector<MultiResVoxel>& blocks,
     }
     for (const auto& subvoxel : subvoxels) {
         GLsubvoxels_.insert(subvoxel);
+        GLvoxels_.erase(subvoxel);
     }
 }
 
@@ -223,13 +255,13 @@ void GlobalGridMap::removeMultiResVoxels(const std::vector<MultiResVoxel>& block
                                           const std::vector<MultiResVoxel>& voxels,
                                           const std::vector<MultiResVoxel>& subvoxels) {
     for (const auto& block : blocks) {
-            GLblocks_.erase(block);
+        GLblocks_.erase(block);
     }
     for (const auto& voxel : voxels) {
-            GLvoxels_.erase(voxel);
+        GLvoxels_.erase(voxel);
     }
     for (const auto& subvoxel : subvoxels) {
-            GLsubvoxels_.erase(subvoxel);
+        GLsubvoxels_.erase(subvoxel);
     }
 }
 
@@ -304,28 +336,9 @@ void GlobalGridMap::saveMapCallback(const std_msgs::BoolConstPtr &msg)
     }
 }
 
-// 将全局网格地图中的点云数据发布到 /map/occupancy/global 话题，
-// 以便在 RViz 中可视化显示。
-void GlobalGridMap::publishGLmap()
-{
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-    cloud = getMapAll();
-
-    cloud.width = cloud.points.size();
-    cloud.height = 1;
-    cloud.is_dense = true;
-    // 指定点云数据的坐标系为 map 坐标系。
-    cloud.header.frame_id = "map";
-
-    sensor_msgs::PointCloud2 cloud_msg;
-    pcl::toROSMsg(cloud, cloud_msg);
-    glmap_pub_.publish(cloud_msg);
-}
-
-// 定时器回调函数，每隔 0.1 秒调用一次 publishGLmap() 函数，
+// 定时器回调函数，每隔 0.1 秒调用一次 publishMultiResMap() 函数，
 // 将全局网格地图中的点云数据发布到 /map/occupancy/global 话题。
 void GlobalGridMap::visCallback(const ros::TimerEvent &e)
 {
-    // publishGLmap();
     publishMultiResMap();
 }

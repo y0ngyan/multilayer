@@ -6,6 +6,8 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /subvoxel1
+        - /Image1
       Splitter Ratio: 0.5
     Tree Height: 739
   - Class: rviz/Selection
@@ -263,7 +265,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.10000000149011612
+      Size (m): 0.05000000074505806
       Style: Boxes
       Topic: /map/layer/subvoxel
       Unreliable: false
@@ -336,7 +338,7 @@ Visualization Manager:
       Value: false
     - Class: rviz/Image
       Enabled: true
-      Image Topic: /D455/color/image_raw
+      Image Topic: /camera/depth/image
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -374,7 +376,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 27.550037384033203
+      Distance: 20.371042251586914
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -382,17 +384,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 10.798430442810059
-        Y: -2.5268609523773193
-        Z: -0.011402683332562447
+        X: -1.1853578090667725
+        Y: 6.5038557052612305
+        Z: -0.011414127424359322
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.36039701104164124
+      Pitch: 0.935396671295166
       Target Frame: map
-      Yaw: 2.2853825092315674
+      Yaw: 1.7303824424743652
     Saved: ~
 Window Geometry:
   Displays:
@@ -412,7 +414,7 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1853
-  X: 2730
-  Y: 114
+  X: 3072
+  Y: 250
   depth:
     collapsed: false
