@@ -1,14 +1,18 @@
 %YAML:1.2
 ---
 OccMap:
-  resolution: 0.025 # (unit: m)
-  map_x: 20 # (unit: m)
-  map_y: 20 # (unit: m)
-  map_z: 5 # (unit: m)
-  voxel_depth: 3
-  block_depth: 4
-  near_distance_threshold: 2.5
+  resolution: 0.05 # (unit: m)
+  map_x: 30 # (unit: m)
+  map_y: 30 # (unit: m)
+  map_z: 30 # (unit: m)
+  voxel_depth: 1
+  block_depth: 3
+  near_distance_threshold: 4.0
   far_distance_threshold: 8.0
+
+  sub_radius_ratio: 0.3
+  voxel_radius_ratio: 0.3
+  block_radius_ratio: 0.5
 
 Probability:
   p_hit: 0.65
@@ -35,19 +39,27 @@ DepthCamera:
   # cy: 239.5
 
   # 仿真
+  # height: 480
+  # width: 640
+  # fx: 554.3826904296875
+  # fy: 554.3826904296875
+  # cx: 320.0
+  # cy: 240.0
+
+  # uhuman
+  width: 720
   height: 480
-  width: 640
-  fx: 554.3826904296875
-  fy: 554.3826904296875
-  cx: 320.0
+  fx: 415.69219381653056
+  fy: 415.69219381653056
+  cx: 360.0
   cy: 240.0
 
-  k_depth_scaling_factor: 1000
-  depth_maxdist: 10.0
+  k_depth_scaling_factor: 1
+  depth_maxdist: 15.0
   depth_mindist: 0.1
   depth_filter_margin: 20
   skip_pixel: 4
-  min_valid_ratio: 0.5
+  min_valid_ratio: 0.3
   depth_threshold_subvoxel: 0.05           # 体素z距离与像素平均值距离比较阈值
   depth_threshold_voxel: 0.2            # 体素z距离与体素平均值距离比较阈值
   depth_threshold_block: 0.2            # 体素z距离与体素平均值距离比较阈值

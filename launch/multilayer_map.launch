@@ -8,8 +8,11 @@
         <!-- <remap from="/odom" to="/pose"/>
         <remap from="/depth" to="/camera/depth/image"/> -->
 
-        <remap from="/odom" to="/mavros/local_position/odom"/>
-        <remap from="/depth" to="/realsense_plugin/camera/depth/image_raw"/>
+        <!-- <remap from="/odom" to="/mavros/local_position/odom"/>
+        <remap from="/depth" to="/realsense_plugin/camera/depth/image_raw"/> -->
+
+        <remap from="/odom" to="/tesse/odom"/>
+        <remap from="/depth" to="/tesse/depth_cam/mono/image_raw"/>
 
         <param name="/paramfile/path" value="$(find multilayer)/config/multilayer_map.yaml" type="string"/>
 

@@ -136,6 +136,14 @@ public:
     }
 };
 
+// struct ProjectionCache {
+//     std::unordered_map<int, bool> block_in_depth_cache;
+//     std::unordered_map<int, bool> voxel_in_depth_cache;
+//     std::unordered_map<int, bool> voxel_projection_cache;
+//     std::unordered_map<int, bool> subvoxel_in_depth_cache;
+//     std::unordered_map<int, bool> subvoxel_projection_cache;
+// };
+
 static const int NUM_BLOCK_MUTEXES = 32; // 块互斥锁数量
 
 class SOGMMap
@@ -165,7 +173,6 @@ private:
     std::vector<Block*> blocks_;
 
     double sub_voxel_radius_, voxel_radius_, block_radius_;
-    double sub_radius_ratio_, voxel_radius_ratio_, block_radius_ratio_;
 
     Eigen::Vector3d map_size_;
     Eigen::Vector3i origin_block_;
@@ -254,11 +261,15 @@ private:
     void switchLayerWithProject(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
-                          const Eigen::Vector3d& T_W_2_C);
+                          const Eigen::Vector3d& T_W_2_C,
+                          std::vector<LayerVoxel>& layer_change_freed,
+                          std::vector<LayerVoxel>& layer_change_occupied);
     void switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
-                          const Eigen::Vector3d& T_W_2_C);
+                          const Eigen::Vector3d& T_W_2_C,
+                          std::vector<LayerVoxel>& layer_change_freed,
+                          std::vector<LayerVoxel>& layer_change_occupied);
     void raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, 
         pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr, 
         Eigen::Vector3d camera_pos);

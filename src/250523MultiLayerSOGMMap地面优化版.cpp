@@ -54,12 +54,9 @@ void SOGMMap::init(std::string filename)
     voxel_res_inv_ = 1.0 / voxel_res_;
     block_res_inv_ = 1.0 / block_res_;
 
-    sub_radius_ratio_ = (double)(OccMap_node["sub_radius_ratio"], 0.5);
-    voxel_radius_ratio_ = (double)(OccMap_node["voxel_radius_ratio"], 0.5);
-    block_radius_ratio_ = (double)(OccMap_node["block_radius_ratio"], 0.5);
-    sub_voxel_radius_ = sub_radius_ratio_ * sub_voxel_res_ * sqrt(3.0);
-    voxel_radius_ = voxel_radius_ratio_ * voxel_res_ * sqrt(3.0);
-    block_radius_ = block_radius_ratio_ * block_res_ * sqrt(3.0);
+    sub_voxel_radius_ = 0.3 * sub_voxel_res_ * sqrt(3.0);
+    voxel_radius_ = 0.3 * voxel_res_ * sqrt(3.0);
+    block_radius_ = 0.5 * block_res_ * sqrt(3.0);
     
     // 读取地图尺寸参数
     double map_x = (double)(OccMap_node["map_x"]);
