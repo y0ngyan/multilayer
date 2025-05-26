@@ -47,6 +47,13 @@ void SOGMMap::init(std::string filename)
     voxel_num_in_block_ = (1 << (block_depth_ - voxel_depth_));  // 2^(block_depth - voxel_depth)
     voxel_num_in_block_square_ = voxel_num_in_block_ * voxel_num_in_block_;
     total_voxel_in_block_ = voxel_num_in_block_ * voxel_num_in_block_ * voxel_num_in_block_;
+
+    // 局部坐标变化
+    voxel_to_block_depth_ = block_depth_ - voxel_depth_;
+    local_subvoxel_mask_ = (1 << voxel_depth_) - 1;
+    local_voxel_mask_ = (1 << voxel_to_block_depth_) - 1;
+    voxel_depth_double_ = 2 * voxel_depth_;
+    voxel_to_block_depth_double_ = 2 * voxel_to_block_depth_;
     
     // 计算不同层级的分辨率
     voxel_res_ = sub_voxel_res_ * subvoxel_num_in_voxel_;
@@ -1980,35 +1987,45 @@ void SOGMMap::blockIdxToWorldWithoutHalf(const Eigen::Vector3i& block_idx, Eigen
 }
 
 // 线性索引转换
+// void SOGMMap::subVoxelIdxToLocalLinear(const Eigen::Vector3i& subvoxel_idx, int& local_linear_idx) const{
+//     // 获取子体素在体素内的局部索引
+//     Eigen::Vector3i voxel_idx;
+//     subVoxelIdxToVoxelIdx(subvoxel_idx, voxel_idx);
+    
+//     Eigen::Vector3i local_idx;
+//     for (int i = 0; i < 3; i++) {
+//         local_idx[i] = subvoxel_idx[i] - (voxel_idx[i] << voxel_depth_);  // 获取余数
+//     }
+    
+//     // 转换为线性索引
+//     local_linear_idx = local_idx[0] + 
+//                        local_idx[1] * subvoxel_num_in_voxel_ + 
+//                        local_idx[2] * subvoxel_num_in_voxel_square_;
+// }
+// void SOGMMap::voxelIdxToLocalLinear(const Eigen::Vector3i& voxel_idx, int& local_linear_idx) const{
+//     // 获取体素在块内的局部索引
+//     Eigen::Vector3i block_idx;
+//     voxelIdxToBlockIdx(voxel_idx, block_idx);
+    
+//     Eigen::Vector3i local_idx;
+//     for (int i = 0; i < 3; i++) {
+//         local_idx[i] = voxel_idx[i] - (block_idx[i] << (block_depth_ - voxel_depth_));  // 获取余数
+//     }
+    
+//     // 转换为线性索引
+//     local_linear_idx = local_idx[0] + 
+//                        local_idx[1] * voxel_num_in_block_ + 
+//                        local_idx[2] * voxel_num_in_block_square_;
+// }
 void SOGMMap::subVoxelIdxToLocalLinear(const Eigen::Vector3i& subvoxel_idx, int& local_linear_idx) const{
-    // 获取子体素在体素内的局部索引
-    Eigen::Vector3i voxel_idx;
-    subVoxelIdxToVoxelIdx(subvoxel_idx, voxel_idx);
-    
-    Eigen::Vector3i local_idx;
-    for (int i = 0; i < 3; i++) {
-        local_idx[i] = subvoxel_idx[i] - (voxel_idx[i] << voxel_depth_);  // 获取余数
-    }
-    
-    // 转换为线性索引
-    local_linear_idx = local_idx[0] + 
-                       local_idx[1] * subvoxel_num_in_voxel_ + 
-                       local_idx[2] * subvoxel_num_in_voxel_square_;
+    local_linear_idx = (subvoxel_idx.x() & local_subvoxel_mask_) + 
+                       ((subvoxel_idx.y() & local_subvoxel_mask_) << voxel_depth_) + 
+                       ((subvoxel_idx.z() & local_subvoxel_mask_) << voxel_depth_double_);
 }
 void SOGMMap::voxelIdxToLocalLinear(const Eigen::Vector3i& voxel_idx, int& local_linear_idx) const{
-    // 获取体素在块内的局部索引
-    Eigen::Vector3i block_idx;
-    voxelIdxToBlockIdx(voxel_idx, block_idx);
-    
-    Eigen::Vector3i local_idx;
-    for (int i = 0; i < 3; i++) {
-        local_idx[i] = voxel_idx[i] - (block_idx[i] << (block_depth_ - voxel_depth_));  // 获取余数
-    }
-    
-    // 转换为线性索引
-    local_linear_idx = local_idx[0] + 
-                       local_idx[1] * voxel_num_in_block_ + 
-                       local_idx[2] * voxel_num_in_block_square_;
+    local_linear_idx = (voxel_idx.x() & local_voxel_mask_) + 
+                       ((voxel_idx.y() & local_voxel_mask_) << voxel_to_block_depth_) + 
+                       ((voxel_idx.z() & local_voxel_mask_) << voxel_to_block_depth_double_);
 }
 void SOGMMap::blockIdxToLocalLinear(const Eigen::Vector3i& block_idx, int& local_linear_idx) const{
     // 计算块在地图范围内的相对位置

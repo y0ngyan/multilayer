@@ -163,6 +163,11 @@ private:
     double sub_voxel_res_inv_, voxel_res_inv_, block_res_inv_;
     int voxel_depth_, block_depth_;
     std::vector<Block*> blocks_;
+    int local_subvoxel_mask_;
+    int local_voxel_mask_;
+    int voxel_to_block_depth_;
+    int voxel_depth_double_;
+    int voxel_to_block_depth_double_;
 
     double sub_voxel_radius_, voxel_radius_, block_radius_;
     double sub_radius_ratio_, voxel_radius_ratio_, block_radius_ratio_;

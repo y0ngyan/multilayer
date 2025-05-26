@@ -2,8 +2,8 @@
 ---
 OccMap:
   resolution: 0.05 # (unit: m)
-  map_x: 30 # (unit: m)
-  map_y: 30 # (unit: m)
+  map_x: 40 # (unit: m)
+  map_y: 40 # (unit: m)
   map_z: 30 # (unit: m)
   voxel_depth: 1
   block_depth: 3
@@ -55,7 +55,7 @@ DepthCamera:
   cy: 240.0
 
   k_depth_scaling_factor: 1
-  depth_maxdist: 15.0
+  depth_maxdist: 20.0
   depth_mindist: 0.1
   depth_filter_margin: 20
   skip_pixel: 4
