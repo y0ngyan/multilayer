@@ -14,6 +14,9 @@
         <remap from="/odom" to="/tesse/odom"/>
         <remap from="/depth" to="/tesse/depth_cam/mono/image_raw"/>
 
+        <param name="frame_id" value="map" type="string"/>
+        <param name="child_frame_id" value="base_link" type="string"/>
+
         <param name="/paramfile/path" value="$(find multilayer)/config/multilayer_map.yaml" type="string"/>
 
     </node>

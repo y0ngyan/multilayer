@@ -1,0 +1,29 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/yy/ws_mavros/devel/include/**",
+        "/home/yy/ws_realsense51/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/yy/ws_realsense51/src/ddynamic_reconfigure/include/**",
+        "/home/yy/ws_mavros/src/mavros/libmavconn/include/**",
+        "/home/yy/PX4_Firmware/Tools/sitl_gazebo/include/**",
+        "/home/yy/ws_mavros/src/mavros/mavros/include/**",
+        "/home/yy/ws_mavros/src/mavros/mavros_msgs/include/**",
+        "/home/yy/ws_realsense51/src/realsense-ros/realsense2_camera/include/**",
+        "/home/yy/ws_mavros/src/mavros/test_mavros/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

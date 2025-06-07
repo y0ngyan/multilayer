@@ -186,6 +186,7 @@ private:
     int skip_pixel_;
 
     float MIN_VALID_RATIO_;
+    float MIN_OCCUPIED_RATIO_;
     double depth_threshold_subvoxel_;
     double depth_threshold_voxel_;
     double depth_threshold_block_;
@@ -260,7 +261,7 @@ private:
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
                           const Eigen::Vector3d& T_W_2_C);
-    void switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen::Vector3d& sensor_pos, 
+    bool switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
                           const Eigen::Vector3d& T_W_2_C);
@@ -287,6 +288,12 @@ private:
         const Eigen::Vector3d &voxel_center,
         double radius,
         double depth_threshold);
+    bool projectVoxelToDepthImageWithPixelStats(const cv::Mat &depth_image, 
+                                      const Eigen::Matrix3d &R_W_2_C,
+                                      const Eigen::Vector3d &T_W_2_C, 
+                                      const Eigen::Vector3d &voxel_center,
+                                      double radius,
+                                      double depth_threshold);
     void updateOccupancyValue(float &value, bool &is_free, float update);
     // 收集不同层级的体素
     void collectMultiLayerVoxels();

@@ -91,3 +91,17 @@ target_link_libraries(multilayer_node
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )
+
+add_executable(pointcloud_multilayer_node
+  include/MultiLayerSOGMMap.hpp
+  include/RayCast.hpp
+  src/MultiLayerSOGMMap.cpp
+  src/RayCast.cpp
+  test/pointcloud_multilayer_node.cpp
+)
+
+target_link_libraries(pointcloud_multilayer_node
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
