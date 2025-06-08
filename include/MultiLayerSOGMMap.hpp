@@ -257,7 +257,9 @@ private:
     // 将此新函数添加到 src/MultiLayerSOGMMap.cpp 中
     bool getDepthInterval(const cv::Mat &depth_image,
                                int min_u, int max_u, int min_v, int max_v,
+                               double voxel_z_min, double voxel_z_max,
                                double& sensor_z_min, double& sensor_z_max,
+                               double& ratio,
                                double resolution);
 
     // 多分辨率投影与更新方法
@@ -293,6 +295,11 @@ private:
         const Eigen::Vector3d &voxel_center,
         double resolution,
         double depth_threshold);
+    bool isOccluded(const cv::Mat &depth_image, 
+        const Eigen::Matrix3d &R_W_2_C,
+        const Eigen::Vector3d &T_W_2_C, 
+        const Eigen::Vector3d &voxel_center,
+        double resolution, double depth_threshold);
     void updateOccupancyValue(float &value, bool &is_free, float update);
     // 收集不同层级的体素
     void collectMultiLayerVoxels();
