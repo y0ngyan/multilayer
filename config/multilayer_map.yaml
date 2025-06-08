@@ -17,10 +17,10 @@ OccMap:
   map_x: 80 # (unit: m)
   map_y: 80 # (unit: m)
   map_z: 40 # (unit: m)
-  voxel_depth: 1
+  voxel_depth: 2
   block_depth: 3
-  near_distance_threshold: 8
-  far_distance_threshold: 10
+  near_distance_threshold: 10
+  far_distance_threshold: 20
 
   sub_radius_ratio: 0.1
   voxel_radius_ratio: 0.1

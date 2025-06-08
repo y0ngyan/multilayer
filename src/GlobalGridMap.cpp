@@ -105,7 +105,7 @@ void GlobalGridMap::syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayCo
             case 1: // VOXEL
                 occ_voxels.push_back(voxel);
                 occ_voxel_set.insert(voxel);
-                std::cout << "Occ voxel: " << voxel.center.x << ", " << voxel.center.y << ", " << voxel.center.z << std::endl;
+                // std::cout << "Occ voxel: " << voxel.center.x << ", " << voxel.center.y << ", " << voxel.center.z << std::endl;
                 break;
             case 2: // SUBVOXEL
                 occ_subvoxels.push_back(voxel);
@@ -146,7 +146,7 @@ void GlobalGridMap::syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayCo
                 free_blocks.push_back(voxel);
                 break;
             case 1: // VOXEL
-                std::cout << "Free voxel: " << voxel.center.x << ", " << voxel.center.y << ", " << voxel.center.z << std::endl;
+                // std::cout << "Free voxel: " << voxel.center.x << ", " << voxel.center.y << ", " << voxel.center.z << std::endl;
                 if (occ_voxel_set.find(voxel) != occ_voxel_set.end()) {
                     continue;
                 }

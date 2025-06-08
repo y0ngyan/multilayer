@@ -105,3 +105,12 @@ target_link_libraries(pointcloud_multilayer_node
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )
+
+add_executable(local_map_visualizer_node
+  test/local_map_visualizer_node.cpp
+)
+
+target_link_libraries(local_map_visualizer_node
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
