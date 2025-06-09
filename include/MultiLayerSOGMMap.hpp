@@ -217,6 +217,7 @@ private:
     // 多线程处理相关
     int num_projection_threads_;  // 投影使用的线程数
     std::vector<std::mutex> block_mutex_ = std::vector<std::mutex>(NUM_BLOCK_MUTEXES); // 块互斥锁
+    std::mutex active_indices_mutex_;
 
     // 线程安全的更新函数
     void setCacheOccupancyThreadSafe(int index, int occ_value,  char current_raycast);

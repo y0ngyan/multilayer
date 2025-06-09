@@ -126,9 +126,12 @@ void SOGMMap::init(std::string filename)
     size_t initial_voxel_pool_size = static_cast<size_t>(
         total_blocks * total_voxel_in_block_ * expected_active_ratio * expected_voxel_ratio
     );
+    // size_t initial_voxel_pool_size = static_cast<size_t>(
+    //     total_blocks * total_voxel_in_block_ * expected_voxel_ratio
+    // );
     // 设置最小和最大值
-    initial_voxel_pool_size = std::max(initial_voxel_pool_size, static_cast<size_t>(10000));
-    initial_voxel_pool_size = std::min(initial_voxel_pool_size, static_cast<size_t>(1000000));
+    // initial_voxel_pool_size = std::max(initial_voxel_pool_size, static_cast<size_t>(10000));
+    // initial_voxel_pool_size = std::min(initial_voxel_pool_size, static_cast<size_t>(1000000));
     std::cout << "[SOGMMap] Creating voxel pool with " << initial_voxel_pool_size << " voxels" << std::endl;
     voxel_pool_ = std::make_unique<ObjectPool<Voxel>>(initial_voxel_pool_size);
     
@@ -241,7 +244,7 @@ void SOGMMap::update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointClo
             std::cout << "[SOGMMap] WARNING: Voxel pool usage is very high!" << std::endl;
         }
     }
-    
+
     slideMap(camera_pos);
     // ros::Time t1 = ros::Time::now();
     raycastProcess(ptws_hit_ptr, ptws_miss_ptr, camera_pos);
@@ -1532,12 +1535,15 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                             propagateOccupancyUp(block);
                         }
                     }
-                    if (!block->is_free()) {
-                        active_block_indices_.insert(block_idx);
-                    } 
-                    else {
-                        active_block_indices_.erase(block_idx);
-                    }
+                    {
+                        std::lock_guard<std::mutex> lock(active_indices_mutex_); // 加锁
+                        if (!block->is_free()) {
+                            active_block_indices_.insert(block_idx);
+                        } 
+                        else {
+                            active_block_indices_.erase(block_idx);
+                        }
+                    } // 锁在此处自动释放
                 }
             }
         });
@@ -1591,11 +1597,15 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                     std::vector<LayerVoxel> block_layer_occupied;
                     bool need_update = switchLayerWithProjectWithUpdateGlobal(block_idx, T_C_2_W, depth_image, R_W_2_C, T_W_2_C);
 
-                    if (!block->is_free_) {
-                        active_block_indices_.insert(block_idx);
-                    } else {
-                        active_block_indices_.erase(block_idx);
-                    }
+                    {
+                        std::lock_guard<std::mutex> lock(active_indices_mutex_); // 加锁
+                        if (!block->is_free()) {
+                            active_block_indices_.insert(block_idx);
+                        } 
+                        else {
+                            active_block_indices_.erase(block_idx);
+                        }
+                    } // 锁在此处自动释放
 
                     // 将该块的层级变化信息添加到线程本地存储
                     thread_layer_change_freed[t].insert(thread_layer_change_freed[t].end(),
@@ -1688,12 +1698,15 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                         }
                     }
                     }
-                    if (!block->is_free()) {
-                        active_block_indices_.insert(block_idx);
-                    } 
-                    else {
-                        active_block_indices_.erase(block_idx);
-                    }
+                    {
+                        std::lock_guard<std::mutex> lock(active_indices_mutex_); // 加锁
+                        if (!block->is_free()) {
+                            active_block_indices_.insert(block_idx);
+                        } 
+                        else {
+                            active_block_indices_.erase(block_idx);
+                        }
+                    } // 锁在此处自动释放
                 }
             }
         });
