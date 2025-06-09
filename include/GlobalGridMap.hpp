@@ -104,6 +104,8 @@ private:
     ros::Subscriber save_map_sub_;
     ros::Timer vis_timer_;
 
+    std::string frame_id_;  // 添加frame_id成员变量
+
     // 同步回调函数
     void syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayConstPtr& occ_msg,
                                 const multilayer::VoxelGridMsgArrayConstPtr& free_msg);

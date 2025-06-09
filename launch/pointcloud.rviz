@@ -6,7 +6,6 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /block1
         - /voxel1
         - /subvoxel1
         - /Image1
@@ -74,13 +73,9 @@ Visualization Manager:
       Frame Timeout: 100
       Frames:
         All Enabled: true
-        base_link:
+        aft_mapped:
           Value: true
-        base_link_gt:
-          Value: true
-        map:
-          Value: true
-        world:
+        camera_init:
           Value: true
       Marker Alpha: 1
       Marker Scale: 5
@@ -89,22 +84,19 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        map:
-          base_link:
-            {}
-        world:
-          base_link_gt:
+        camera_init:
+          aft_mapped:
             {}
       Update Interval: 0
       Value: true
     - Class: rviz/Marker
-      Enabled: false
+      Enabled: true
       Marker Topic: /map/range/local
       Name: range_local
       Namespaces:
-        {}
+        "": true
       Queue Size: 100
-      Value: false
+      Value: true
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /map/range/slide
@@ -200,8 +192,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 12
-        Min Value: 0
+        Max Value: -9999
+        Min Value: 9999
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -218,7 +210,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.800000011920929
+      Size (m): 0.4000000059604645
       Style: Boxes
       Topic: /map/layer/block
       Unreliable: false
@@ -228,8 +220,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 12.300000190734863
-        Min Value: 0.10000000149011612
+        Max Value: 10.5
+        Min Value: 10.100000381469727
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -256,8 +248,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 8.449999809265137
-        Min Value: 0.05000000074505806
+        Max Value: 6.949999809265137
+        Min Value: -0.3499999940395355
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -359,9 +351,9 @@ Visualization Manager:
       Value: true
   Enabled: true
   Global Options:
-    Background Color: 85; 87; 83
+    Background Color: 255; 255; 255
     Default Light: true
-    Fixed Frame: map
+    Fixed Frame: camera_init
     Frame Rate: 30
   Name: root
   Tools:
@@ -385,7 +377,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/XYOrbit
-      Distance: 30.0321044921875
+      Distance: 13.03110122680664
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -393,17 +385,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 10.824085235595703
-        Y: 11.058300971984863
-        Z: 1.4999315738677979
+        X: -0.5255837440490723
+        Y: 1.2473771572113037
+        Z: 1.4999299049377441
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.20539937913417816
+      Pitch: 0.3153984248638153
       Target Frame: map
-      Yaw: 6.2772369384765625
+      Yaw: 2.9703986644744873
     Saved:
       - Class: rviz/FrameAligned
         Enable Stereo Rendering:
@@ -463,6 +455,6 @@ Window Geometry:
     collapsed: false
   Width: 1386
   X: 755
-  Y: 149
+  Y: 223
   depth:
     collapsed: false

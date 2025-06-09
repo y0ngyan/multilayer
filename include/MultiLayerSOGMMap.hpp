@@ -19,8 +19,9 @@
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include "RayCast.hpp"
-// #include "PlanMapBase.hpp"
+
 #include <multilayer/VoxelGridMsg.h>
+#include "ObjectPool.hpp"
 
 // 新增头文件，支持多线程处理
 #include <thread>      // 用于std::thread
@@ -40,6 +41,10 @@ enum class LayerType : uint8_t
     VOXEL,
     SUBVOXEL,
 };
+
+class Voxel;    // 前向声明Voxel类
+template <typename T>
+class ObjectPool; // 前向声明ObjectPool模板类
 
 class Voxel {
 public:
@@ -85,52 +90,35 @@ public:
     bool is_free_;                  // 是否空闲
     LayerType layer_;
     
-    Block(unsigned int total_voxels) : is_voxel_allocated_(false),
-                                      occupancy_value_(0.0f), 
-                                      layer_(LayerType::BLOCK),
-                                      is_free_(true) {
-        // 初始不分配体素指针内存，按需分配
-    }
-    
-    ~Block() {
-        if (is_voxel_allocated_) {
-            for (auto voxel : voxels_) {
-                if (voxel != nullptr) {
-                    delete voxel;
-                }
-            }
-        }
-    }
-
-    void allocate_voxels(unsigned int total_voxels, const float value) {
-        if (!is_voxel_allocated_) {
-            voxels_.resize(total_voxels, nullptr);
-            for (unsigned int i = 0; i < total_voxels; ++i) {
-                voxels_[i] = new Voxel(value);
-            }
-            is_voxel_allocated_ = true;
-        }
-    }
+    // Block的构造和析构函数
+    Block() : is_voxel_allocated_(false),
+              occupancy_value_(0.0f), 
+              layer_(LayerType::BLOCK),
+              is_free_(true) {}
     
     // 检查块是否空闲
     bool is_free() const {
         return is_free_;
     }
-    
-    // 检查体素是否已分配
-    bool is_voxel_allocated(unsigned int local_idx) const {
-        return is_voxel_allocated_ && voxels_[local_idx] != nullptr;
+
+    void allocate_voxels(unsigned int total_voxels, const float value, ObjectPool<Voxel>& voxel_pool){
+        if (!is_voxel_allocated_) {
+            voxels_.resize(total_voxels, nullptr);
+            for (unsigned int i = 0; i < total_voxels; ++i) {
+                voxels_[i] = voxel_pool.acquire(value); // 从池中获取Voxel对象
+            }
+            is_voxel_allocated_ = true;
+        }
     }
 
-     // 释放所有体素
-    void free_all_voxels() {
+    void free_all_voxels(ObjectPool<Voxel>& voxel_pool){
         if (is_voxel_allocated_) {
-            for (size_t i = 0; i < voxels_.size(); ++i) {
-                if (voxels_[i] != nullptr) {
-                    delete voxels_[i];
-                    voxels_[i] = nullptr;
+            for (Voxel* voxel_ptr : voxels_) {
+                if (voxel_ptr != nullptr) {
+                    voxel_pool.release(voxel_ptr); // 将Voxel对象归还到池中
                 }
             }
+            voxels_.clear();
             is_voxel_allocated_ = false;
         }
     }
@@ -159,6 +147,10 @@ private:
         DISCOVER = 0
     };
 
+    // 声明对象池
+    std::unique_ptr<ObjectPool<Block>> block_pool_;
+    std::unique_ptr<ObjectPool<Voxel>> voxel_pool_;
+
     double sub_voxel_res_, voxel_res_, block_res_;
     double sub_voxel_res_inv_, voxel_res_inv_, block_res_inv_;
     int voxel_depth_, block_depth_;
@@ -168,6 +160,9 @@ private:
     int voxel_to_block_depth_;
     int voxel_depth_double_;
     int voxel_to_block_depth_double_;
+
+    // 用于追踪所有被激活（非空）的Block的线性索引
+    std::unordered_set<int> active_block_indices_; 
 
     double sub_voxel_radius_, voxel_radius_, block_radius_;
     double sub_radius_ratio_, voxel_radius_ratio_, block_radius_ratio_;
@@ -185,7 +180,8 @@ private:
     double depth_maxdist_, depth_mindist_;
     int skip_pixel_;
 
-    float MIN_VALID_RATIO_;
+    float MIN_VALID_RATIO_SUB_;
+    float MIN_VALID_RATIO_VOXEL_;
     double depth_threshold_subvoxel_;
     double depth_threshold_voxel_;
     double depth_threshold_block_;
@@ -199,9 +195,6 @@ private:
     Eigen::Vector3d T_C_2_B_;
 
     std::vector<int> slideClearIndex_;
-
-    std::vector<int> new_occ_;
-    std::vector<int> new_free_;
 
     float prob_hit_log_, prob_miss_log_, clamp_min_log_, clamp_max_log_, min_occupancy_log_;
 
@@ -253,6 +246,13 @@ private:
                                 int min_u, int max_u,
                                 int min_v, int max_v,
                                 double &avg_depth);
+    // 将此新函数添加到 src/MultiLayerSOGMMap.cpp 中
+    bool getDepthInterval(const cv::Mat &depth_image,
+                               int min_u, int max_u, int min_v, int max_v,
+                               double voxel_z_min, double voxel_z_max,
+                               double& sensor_z_min, double& sensor_z_max,
+                               double& ratio,
+                               double resolution);
 
     // 多分辨率投影与更新方法
     void switchLayer(int block_idx, const Eigen::Vector3d& sensor_pos);
@@ -260,7 +260,7 @@ private:
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
                           const Eigen::Vector3d& T_W_2_C);
-    void switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen::Vector3d& sensor_pos, 
+    bool switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
                           const Eigen::Vector3d& T_W_2_C);
@@ -285,8 +285,14 @@ private:
         const Eigen::Matrix3d &R_W_2_C,
         const Eigen::Vector3d &T_W_2_C, 
         const Eigen::Vector3d &voxel_center,
-        double radius,
+        double resolution,
+        double valid_ratio,
         double depth_threshold);
+    bool isOccluded(const cv::Mat &depth_image, 
+        const Eigen::Matrix3d &R_W_2_C,
+        const Eigen::Vector3d &T_W_2_C, 
+        const Eigen::Vector3d &voxel_center,
+        double resolution, double depth_threshold);
     void updateOccupancyValue(float &value, bool &is_free, float update);
     // 收集不同层级的体素
     void collectMultiLayerVoxels();
@@ -320,6 +326,9 @@ public:
     bool isOccupied(const int linear_idx);
     bool isOccupied(const Eigen::Vector3i block_idx);
     bool isOccupied(const Eigen::Vector3d pos);
+
+    // 新增：获取局部地图中所有被占据的、多分辨率栅格的状态
+    void getLocalMapState(std::vector<multilayer::VoxelGridMsg>& occupied_cells) const;
 
     // 多分辨接口函数
     const std::vector<LayerVoxel>& getNewOccupiedLayerVoxels() const;
