@@ -33,6 +33,9 @@ bool GlobalGridMap::saveMap()
 
 void GlobalGridMap::init(ros::NodeHandle &nh)
 {
+    // 从参数服务器读取frame_id，如果没有设置则使用默认值
+    nh.param<std::string>("frame_id", frame_id_, "map");
+
     save_map_sub_ = nh.subscribe("/map/save", 1, &GlobalGridMap::saveMapCallback, this);
 
     // 配置同步订阅
@@ -102,6 +105,7 @@ void GlobalGridMap::syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayCo
             case 1: // VOXEL
                 occ_voxels.push_back(voxel);
                 occ_voxel_set.insert(voxel);
+                std::cout << "Occ voxel: " << voxel.center.x << ", " << voxel.center.y << ", " << voxel.center.z << std::endl;
                 break;
             case 2: // SUBVOXEL
                 occ_subvoxels.push_back(voxel);
@@ -142,6 +146,7 @@ void GlobalGridMap::syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayCo
                 free_blocks.push_back(voxel);
                 break;
             case 1: // VOXEL
+                std::cout << "Free voxel: " << voxel.center.x << ", " << voxel.center.y << ", " << voxel.center.z << std::endl;
                 if (occ_voxel_set.find(voxel) != occ_voxel_set.end()) {
                     continue;
                 }
@@ -165,74 +170,6 @@ void GlobalGridMap::syncVoxelGridsCallback(const multilayer::VoxelGridMsgArrayCo
     // std::cout << "[GLOBAL MAP] Synchronized update - Occ: " << occ_msg->voxels.size() 
     //           << ", Free: " << free_msg->voxels.size() << std::endl;
 }
-
-// // 处理多分辨率占据体素的回调
-// void GlobalGridMap::multiResOccCallback(const multilayer::VoxelGridMsgArrayConstPtr& msg) {
-//     std::vector<MultiResVoxel> blocks;
-//     std::vector<MultiResVoxel> voxels;
-//     std::vector<MultiResVoxel> subvoxels;
-//     blocks.reserve(msg->voxels.size());
-//     voxels.reserve(msg->voxels.size());
-//     subvoxels.reserve(msg->voxels.size());
-    
-//     for (const auto& voxel_msg : msg->voxels) {
-//         MultiResVoxel voxel;
-//         voxel.center.x = voxel_msg.position.x;
-//         voxel.center.y = voxel_msg.position.y;
-//         voxel.center.z = voxel_msg.position.z;
-
-//         switch (voxel_msg.layer) {
-//             case 0: // BLOCK
-//                 blocks.push_back(voxel);
-//                 break;
-//             case 1: // VOXEL
-//                 voxels.push_back(voxel);
-//                 break;
-//             case 2: // SUBVOXEL
-//                 subvoxels.push_back(voxel);
-//                 break;
-//             default:
-//                 break;
-//         }
-//     }
-    
-//     addMultiResVoxels(blocks, voxels, subvoxels);
-// }
-
-// // 处理多分辨率空闲体素的回调
-// void GlobalGridMap::multiResFreeCallback(const multilayer::VoxelGridMsgArrayConstPtr& msg) {
-//     std::vector<MultiResVoxel> blocks;
-//     std::vector<MultiResVoxel> voxels;
-//     std::vector<MultiResVoxel> subvoxels;
-//     blocks.reserve(msg->voxels.size());
-//     voxels.reserve(msg->voxels.size());
-//     subvoxels.reserve(msg->voxels.size());
-    
-//     for (const auto& voxel_msg : msg->voxels) {
-//         MultiResVoxel voxel;
-//         voxel.center.x = voxel_msg.position.x;
-//         voxel.center.y = voxel_msg.position.y;
-//         voxel.center.z = voxel_msg.position.z;
-//         // voxel.layer = voxel_msg.layer;
-        
-//         // 根据层级分类
-//         switch (voxel_msg.layer) {
-//             case 0: // BLOCK
-//                 blocks.push_back(voxel);
-//                 break;
-//             case 1: // VOXEL
-//                 voxels.push_back(voxel);
-//                 break;
-//             case 2: // SUBVOXEL
-//                 subvoxels.push_back(voxel);
-//                 break;
-//             default:
-//                 break;
-//         }
-//     }
-
-//     removeMultiResVoxels(blocks, voxels, subvoxels);
-// }
 
 // 添加多个多分辨率体素
 void GlobalGridMap::addMultiResVoxels(const std::vector<MultiResVoxel>& blocks,
@@ -314,9 +251,9 @@ void GlobalGridMap::getMultiResMapCloud(pcl::PointCloud<pcl::PointXYZRGB> &block
 void GlobalGridMap::publishMultiResMap() {
     pcl::PointCloud<pcl::PointXYZRGB> block_cloud, voxel_cloud, subvoxel_cloud;
     getMultiResMapCloud(block_cloud, voxel_cloud, subvoxel_cloud);
-    block_cloud.header.frame_id = "map";
-    voxel_cloud.header.frame_id = "map";
-    subvoxel_cloud.header.frame_id = "map";
+    block_cloud.header.frame_id = frame_id_;
+    voxel_cloud.header.frame_id = frame_id_;
+    subvoxel_cloud.header.frame_id = frame_id_;
     sensor_msgs::PointCloud2 block_msg, voxel_msg, subvoxel_msg;
     pcl::toROSMsg(block_cloud, block_msg);
     pcl::toROSMsg(voxel_cloud, voxel_msg);

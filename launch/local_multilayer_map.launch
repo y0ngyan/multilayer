@@ -5,6 +5,9 @@
         <!-- <remap from="/odom" to="/t265/odom/sample"/>
         <remap from="/depth" to="/D455/depth/image_rect_raw"/> -->
 
+        <!-- <remap from="/odom" to="/t265/odom/sample"/>
+        <remap from="/depth" to="/d400/depth/image_rect_raw"/> -->
+
         <!-- <remap from="/odom" to="/pose"/>
         <remap from="/depth" to="/camera/depth/image"/> -->
 
@@ -21,8 +24,10 @@
 
     </node>
 
-    <node pkg="multilayer" name="global_gridmap_node" type="global_gridmap_node" output="screen" />
+    <!-- <node pkg="multilayer" name="global_gridmap_node" type="global_gridmap_node" output="screen" /> -->
+    
+    <node pkg="multilayer" name="local_gridmap_node" type="local_map_visualizer_node" output="screen"/>
 
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find multilayer)/launch/multilayer.rviz" required="true" />
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find multilayer)/launch/local.rviz" required="true" />
 
 </launch>

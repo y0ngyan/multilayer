@@ -42,15 +42,6 @@ enum class LayerType : uint8_t
     SUBVOXEL,
 };
 
-enum class VoxelProjectionStatus {
-    BEHIND_CAMERA,      // 在相机后方
-    OUT_OF_IMAGE,       // 超出图像范围
-    INSUFFICIENT_DATA,  // 深度数据不足
-    OCCLUDED,          // 被遮挡
-    MATCHED,           // 匹配（在深度图中且深度一致）
-    NOT_MATCHED        // 不匹配（在深度图中但深度不一致）
-};
-
 class Voxel;    // 前向声明Voxel类
 template <typename T>
 class ObjectPool; // 前向声明ObjectPool模板类
@@ -191,10 +182,6 @@ private:
 
     float MIN_VALID_RATIO_SUB_;
     float MIN_VALID_RATIO_VOXEL_;
-    float MIN_VALID_RATIO_BLOCK_;
-
-    double MIN_VALID_RATIO_RATIO_;
-
     double depth_threshold_subvoxel_;
     double depth_threshold_voxel_;
     double depth_threshold_block_;
@@ -256,6 +243,10 @@ private:
     
     // 极角到像素坐标的转换
     void polarToPixel(double azimuth, double elevation, int& u, int& v);
+    bool getAverageDepth(const cv::Mat &depth_image, 
+                                int min_u, int max_u,
+                                int min_v, int max_v,
+                                double &avg_depth);
     // 将此新函数添加到 src/MultiLayerSOGMMap.cpp 中
     bool getDepthInterval(const cv::Mat &depth_image,
                                int min_u, int max_u, int min_v, int max_v,
@@ -265,6 +256,7 @@ private:
                                double resolution);
 
     // 多分辨率投影与更新方法
+    void switchLayer(int block_idx, const Eigen::Vector3d& sensor_pos);
     void switchLayerWithProject(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
@@ -281,16 +273,42 @@ private:
         const Eigen::Vector3d &T_C_2_W);
     void propagateOccupancyUp(Block* block);
     void propagateOccupancyDown(Block* block, float probability_value);
+    bool isPointInDepthImage(const cv::Mat &depth_image, 
+        const Eigen::Matrix3d &R_W_2_C,
+        const Eigen::Vector3d &T_W_2_C, 
+        const Eigen::Vector3d &voxel_center);
+    bool isInDepthImage(const cv::Mat &depth_image, 
+        const Eigen::Matrix3d &R_W_2_C,
+        const Eigen::Vector3d &T_W_2_C, 
+        const Eigen::Vector3d &voxel_center,
+        double radius);
+    bool projectVoxelToDepthImage(const cv::Mat &depth_image, 
+        const Eigen::Matrix3d &R_W_2_C,
+        const Eigen::Vector3d &T_W_2_C, 
+        const Eigen::Vector3d &voxel_center,
+        double resolution,
+        double valid_ratio,
+        double depth_threshold);
+    bool isOccluded(const cv::Mat &depth_image, 
+        const Eigen::Matrix3d &R_W_2_C,
+        const Eigen::Vector3d &T_W_2_C, 
+        const Eigen::Vector3d &voxel_center,
+        double resolution, double depth_threshold);
     void updateOccupancyValue(float &value, bool &is_free, float update);
-    VoxelProjectionStatus projectVoxelOnce(const cv::Mat &depth_image, 
-                                               const Eigen::Matrix3d &R_W_2_C,
-                                               const Eigen::Vector3d &T_W_2_C, 
-                                               const Eigen::Vector3d &voxel_center,
-                                               const LayerType layer_type,
-                                               double resolution,
-                                               double valid_ratio,
-                                               double depth_threshold);
-    double getAdaptiveValidRatio(double distance, LayerType layer) const;
+    // 收集不同层级的体素
+    void collectMultiLayerVoxels();
+    void recordLayerInfo(Block* block, 
+                             const Eigen::Vector3i& block_grid_idx, 
+                             const Eigen::Vector3d& block_center, 
+                             LayerType layer_type, 
+                             std::vector<LayerVoxel>& layer_change_);
+    void switchLayerAndUpdateProbability(int block_idx, const Eigen::Vector3d& sensor_pos, 
+                                             const cv::Mat& depth_image,
+                                             const Eigen::Matrix3d& R_W_2_C,
+                                             const Eigen::Vector3d& T_W_2_C,
+                                             bool is_hit_block,
+                                             std::vector<LayerVoxel>& layer_change_freed,
+                                             std::vector<LayerVoxel>& layer_change_occupied);
 public:
     SOGMMap();
     ~SOGMMap();

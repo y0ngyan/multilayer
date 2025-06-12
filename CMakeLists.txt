@@ -2,13 +2,12 @@ cmake_minimum_required(VERSION 3.0.2)
 project(multilayer)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
-# add_compile_options(-std=c++11)
-# ADD_COMPILE_OPTIONS(-std=c++11)s
-ADD_COMPILE_OPTIONS(-std=c++14)
-set(CMAKE_CXX_FLAGS "-std=c++17 ${CMAKE_CXX_FLAGS} -O3 -Wall -pthread") # -Wextra -Werror
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
 # set(CMAKE_BUILD_TYPE "RELEASE")
-set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_BUILD_TYPE Release)
+
+# 简化为 (当构建类型为Release时，-O3会自动添加)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -pthread")
+add_compile_options(-std=c++17) # 推荐使用这种方式设置C++标准
 
 
 ## Find catkin macros and libraries
@@ -56,8 +55,28 @@ find_package(Eigen3 REQUIRED)
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-include_directories(
-  SYSTEM
+# include_directories(
+#   SYSTEM
+#   include
+#   ${catkin_INCLUDE_DIRS}
+#   ${OpenCV_INCLUDE_DIRS}
+#   ${PCL_INCLUDE_DIRS}
+#   ${Eigen3_INCLUDE_DIRS}
+# )
+
+link_directories(${PCL_LIBRARY_DIRS})
+
+add_library(multilayer_lib
+  include/GlobalGridMap.hpp
+  include/MultiLayerSOGMMap.hpp
+  include/RayCast.hpp
+  src/GlobalGridMap.cpp
+  src/MultiLayerSOGMMap.cpp
+  src/RayCast.cpp
+)
+
+target_include_directories(multilayer_lib
+  PUBLIC
   include
   ${catkin_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
@@ -65,29 +84,20 @@ include_directories(
   ${Eigen3_INCLUDE_DIRS}
 )
 
-link_directories(${PCL_LIBRARY_DIRS})
-
-add_executable(global_gridmap_node
-  include/GlobalGridMap.hpp
-  src/GlobalGridMap.cpp
-  test/global_gridmap_node.cpp
-)
-
-target_link_libraries(global_gridmap_node
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
-)
-
-add_executable(multilayer_node
-  include/MultiLayerSOGMMap.hpp
-  include/RayCast.hpp
-  src/MultiLayerSOGMMap.cpp
-  src/RayCast.cpp
-  test/multilayer_node.cpp
-)
-
-target_link_libraries(multilayer_node
+target_link_libraries(multilayer_lib
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )
+
+add_executable(global_gridmap_node test/global_gridmap_node.cpp)
+target_link_libraries(global_gridmap_node multilayer_lib)
+
+add_executable(multilayer_node test/multilayer_node.cpp)
+target_link_libraries(multilayer_node multilayer_lib)
+
+add_executable(pointcloud_multilayer_node test/pointcloud_multilayer_node.cpp)
+target_link_libraries(pointcloud_multilayer_node multilayer_lib)
+
+add_executable(local_map_visualizer_node test/local_map_visualizer_node.cpp)
+target_link_libraries(local_map_visualizer_node multilayer_lib)

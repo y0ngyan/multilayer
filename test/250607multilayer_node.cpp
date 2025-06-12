@@ -22,8 +22,6 @@
 #include <multilayer/VoxelGridMsg.h>
 #include <multilayer/VoxelGridMsgArray.h>
 
-#include <mutex>
-
 // 相机的内参、位姿信息、深度图像和点云数据
 struct cameraData
 {
@@ -54,10 +52,7 @@ std::string frame_id_;
 std::string child_frame_id_;
 
 // ROS定时器，用于定期触发某些操作，例如更新地图
-ros::Timer map_update_timer_;
-// ROS定时器，用于定期发布局部地图状态
-ros::Timer map_vis_timer_;
-std::mutex map_mutex_;        // <<-- 用于保护共享对象 map_ 的互斥锁
+ros::Timer map_timer_;
 
 // 这种同步策略允许在时间上近似匹配的消息对进行同步
 typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, nav_msgs::Odometry> SyncPolicyImageOdom;
@@ -72,11 +67,11 @@ std::shared_ptr<message_filters::Subscriber<nav_msgs::Odometry>> odom_sub_;
 ros::Publisher slide_global_map_range_pub_, local_update_range_pub_; // the sliding window size
 // 发布滑动窗口占用体素
 ros::Publisher slide_global_occ_pub_;                                // the sliding window size
+// 发布新的占用和空闲区域
+ros::Publisher new_occ_pub_, new_free_pub_;
 
 // 多分辨率占据和空闲区域
-// ros::Publisher multi_res_occ_pub_, multi_res_free_pub_;
-// 新增的Publisher，用于发布局部地图的完整状态
-ros::Publisher local_map_state_pub_; 
+ros::Publisher multi_res_occ_pub_, multi_res_free_pub_;
 
 bool depth_need_update_;
 Eigen::Vector3d local_map_boundary_min_, local_map_boundary_max_;
@@ -169,39 +164,105 @@ void publishSlideGlobalGridMapRange()
     slide_global_map_range_pub_.publish(mk);
 }
 
-// void publishMultiResolutionOccupancy() {
-//     multilayer::VoxelGridMsgArray occ_msg;
-//     occ_msg.header.frame_id = frame_id_;
-//     occ_msg.header.stamp = ros::Time::now();
-    
-//     // 获取多层级占据体素
-//     const auto& occupied_voxels = map_.getNewOccupiedLayerVoxels();
-    
-//     // 填充消息
-//     std::vector<multilayer::VoxelGridMsg> occ_msg_array;
-//     map_.fillVoxelGridMsg(occ_msg_array, occupied_voxels);
-//     occ_msg.voxels = occ_msg_array;
-    
-//     // 发布消息
-//     multi_res_occ_pub_.publish(occ_msg);
-// }
+// 发布新的占据点云数据
+void publishNewOcc()
+{
+    // 获取新占据体素的索引
+    std::vector<int> *newOcc;
+    newOcc = map_.getNewOcc();
 
-// void publishMultiResolutionFree() {
-//     multilayer::VoxelGridMsgArray free_msg;
-//     free_msg.header.frame_id = frame_id_;
-//     free_msg.header.stamp = ros::Time::now();
+    pcl::PointXYZ pt;
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+
+    Eigen::Vector3d pos;
+
+    for (size_t i = 0; i < newOcc->size(); i++)
+    {
+        Eigen::Vector3i blockIdx = map_.linearToBlockIdx(newOcc->at(i));
+        map_.blockIdxToWorld(blockIdx, pos);
+
+        pt.x = pos(0);
+        pt.y = pos(1);
+        pt.z = pos(2);
+        cloud.points.push_back(pt);
+    }
+
+    cloud.width = cloud.points.size();
+    cloud.height = 1;
+    cloud.is_dense = true;
+    cloud.header.frame_id = frame_id_;
+
+    // 将点云数据转换为 ROS 消息类型 sensor_msgs::PointCloud2
+    sensor_msgs::PointCloud2 cloud_msg;
+    pcl::toROSMsg(cloud, cloud_msg);
+    new_occ_pub_.publish(cloud_msg);
+}
+
+// 发布新的空闲点云数据
+void publishNewFree()
+{
+    std::vector<int> *newFree;
+    newFree = map_.getNewFree();
+
+    pcl::PointXYZ pt;
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+
+    Eigen::Vector3d pos;
+
+    for (size_t i = 0; i < newFree->size(); i++)
+    {
+        Eigen::Vector3i blockIdx = map_.linearToBlockIdx(newFree->at(i));
+        map_.blockIdxToWorld(blockIdx, pos);
+
+        pt.x = pos(0);
+        pt.y = pos(1);
+        pt.z = pos(2);
+        cloud.points.push_back(pt);
+    }
+
+    cloud.width = cloud.points.size();
+    cloud.height = 1;
+    cloud.is_dense = true;
+    cloud.header.frame_id = frame_id_;
+
+    sensor_msgs::PointCloud2 cloud_msg;
+    pcl::toROSMsg(cloud, cloud_msg);
+    new_free_pub_.publish(cloud_msg);
+}
+
+void publishMultiResolutionOccupancy() {
+    multilayer::VoxelGridMsgArray occ_msg;
+    occ_msg.header.frame_id = frame_id_;
+    occ_msg.header.stamp = ros::Time::now();
     
-//     // 获取多层级空闲体素
-//     const auto& freed_voxels = map_.getNewFreedLayerVoxels();
+    // 获取多层级占据体素
+    const auto& occupied_voxels = map_.getNewOccupiedLayerVoxels();
     
-//     // 填充消息
-//     std::vector<multilayer::VoxelGridMsg> free_msg_array;
-//     map_.fillVoxelGridMsg(free_msg_array, freed_voxels);
-//     free_msg.voxels = free_msg_array;
+    // 填充消息
+    std::vector<multilayer::VoxelGridMsg> occ_msg_array;
+    map_.fillVoxelGridMsg(occ_msg_array, occupied_voxels);
+    occ_msg.voxels = occ_msg_array;
     
-//     // 发布消息
-//     multi_res_free_pub_.publish(free_msg);
-// }
+    // 发布消息
+    multi_res_occ_pub_.publish(occ_msg);
+}
+
+void publishMultiResolutionFree() {
+    multilayer::VoxelGridMsgArray free_msg;
+    free_msg.header.frame_id = frame_id_;
+    free_msg.header.stamp = ros::Time::now();
+    
+    // 获取多层级空闲体素
+    const auto& freed_voxels = map_.getNewFreedLayerVoxels();
+    
+    // 填充消息
+    std::vector<multilayer::VoxelGridMsg> free_msg_array;
+    map_.fillVoxelGridMsg(free_msg_array, freed_voxels);
+    free_msg.voxels = free_msg_array;
+    
+    // 发布消息
+    multi_res_free_pub_.publish(free_msg);
+}
 
 // 发布全局占据地图的点云数据
 void publishSlideGlobalOccMap()
@@ -421,23 +482,35 @@ void updateMapCallback(const ros::TimerEvent &)
 
     ros::Time t1, t2, t3, t4;
     t1 = ros::Time::now();
-    {
-        // 在访问共享的 map_ 对象前加锁
-        std::lock_guard<std::mutex> lock(map_mutex_);
-        map_.update(&camData_.ptws_hit, &camData_.ptws_miss, camData_.depth_image, camData_.R_C_2_W, camData_.T_C_2_W, camData_.camera_pos);
-    }
+
+    map_.update(&camData_.ptws_hit, &camData_.ptws_miss, camData_.depth_image, camData_.R_C_2_W, camData_.T_C_2_W, camData_.camera_pos);
+    // map_.update(camData_.depth_image, camData_.R_C_2_W, camData_.T_C_2_W, camData_.camera_pos);
 
     t2 = ros::Time::now();
-    
+
+    // TODO！！在什么时候获得到这些发布的话题的
+    // 在beyesProcess()根据点云命中次数和未命中次数更新体素的对数几率值后，确定new_occ_和new_free_
+    // ptws_hit和ptws_miss根据深度图来获得，超出最大深度即为miss，否则为hit
+    // DONE!!!
+    publishNewOcc();
+    publishNewFree();
+    publishLocalUpdateRange();
+    publishSlideGlobalGridMapRange();
+
+    // 添加多分辨率发布
+    publishMultiResolutionOccupancy();
+    publishMultiResolutionFree();
+
+    // publishSlideGlobalOccMap();
+
     // 更新 local_map_boundary_min_ 和 local_map_boundary_max_
     // 将它们设置为相机位置
     local_map_boundary_min_ = camData_.camera_pos;
     local_map_boundary_max_ = camData_.camera_pos;
 
-    publishLocalUpdateRange(); // 发布局部更新范围
-    publishSlideGlobalGridMapRange(); // 发布全局网格地图范围
-
     depth_need_update_ = false;
+
+    t3 = ros::Time::now();
 
     update_num++;
     occ_all_t = occ_all_t + (t2 - t1).toSec();
@@ -448,41 +521,11 @@ void updateMapCallback(const ros::TimerEvent &)
     {
         std::cout << "[Occupancy] "
                   << "max time: " << occ_max_t << ", average time: " << occ_all_t / update_num << ", time: " << (t2 - t1).toSec() << std::endl;
+        std::cout << "[vis]: " << (t3 - t2).toSec() << std::endl;
     }
     // ROS_INFO_STREAM("update map done, update num: " << update_num);
 }
 
-// 低频回调：负责生成和发布完整的局部地图状态
-void visualizeMapCallback(const ros::TimerEvent &)
-{
-    // 只有当有节点订阅时才执行这个耗时操作
-    if (local_map_state_pub_.getNumSubscribers() == 0)
-        return;
-
-    multilayer::VoxelGridMsgArray state_msg;
-    
-    ros::Time t1, t2;
-    t1 = ros::Time::now();
-    {
-        // 在访问共享的 map_ 对象前加锁
-        std::lock_guard<std::mutex> lock(map_mutex_);
-        
-        // 调用耗时的 getLocalMapState 来填充消息
-        map_.getLocalMapState(state_msg.voxels);
-    } // 锁在这里被释放，锁的范围应尽可能小
-    t2 = ros::Time::now();
-
-    // 如果没有获取到任何占据单元，则不发布
-    if (state_msg.voxels.empty())
-        return;
-
-    // 填充消息头并发布
-    state_msg.header.frame_id = frame_id_;
-    state_msg.header.stamp = ros::Time::now();
-    local_map_state_pub_.publish(state_msg);
-
-    // ROS_INFO_STREAM("Visualize map done, time: " << (t2 - t1).toSec());
-}
 
 /**
  * @brief 从 YAML 文件中设置相机参数。
@@ -587,8 +630,7 @@ int main(int argc, char **argv)
 
     setCameraParam(filename);
 
-    map_update_timer_ = node.createTimer(ros::Duration(0.05), updateMapCallback);
-    map_vis_timer_ = node.createTimer(ros::Duration(1.0), visualizeMapCallback);
+    map_timer_ = node.createTimer(ros::Duration(0.05), updateMapCallback);
 
     depth_sub_.reset(new message_filters::Subscriber<sensor_msgs::Image>(node, "/depth", 1));
     odom_sub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(node, "/odom", 1));
@@ -598,16 +640,15 @@ int main(int argc, char **argv)
     // 发布局部更新范围、滑动窗口范围、新占据区域和新空闲区域的话题
     local_update_range_pub_ = node.advertise<visualization_msgs::Marker>("/map/range/local", 10);
     slide_global_map_range_pub_ = node.advertise<visualization_msgs::Marker>("/map/range/slide", 10);
+    new_occ_pub_ = node.advertise<sensor_msgs::PointCloud2>("/map/new_occ", 10);
+    new_free_pub_ = node.advertise<sensor_msgs::PointCloud2>("/map/new_free", 10);
     // 多分辨率发布
-    // multi_res_occ_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/multi_res_occ", 10);
-    // multi_res_free_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/multi_res_free", 10);
+    multi_res_occ_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/multi_res_occ", 10);
+    multi_res_free_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/multi_res_free", 10);
     // TODO！！这个话题没有获得对应的消息
     // 运行程序后，在rviz中该信息并没有对应的可视化
     // DONE！！！
     slide_global_occ_pub_ = node.advertise<sensor_msgs::PointCloud2>("/map/sogm", 10);
-
-    // 初始化新的Publisher
-    local_map_state_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/local_state", 10);
 
     depth_need_update_ = false;
 

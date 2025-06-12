@@ -1,0 +1,61 @@
+%YAML:1.2
+---
+OccMap:
+  resolution: 0.2 # (unit: m)
+  map_x: 80 # (unit: m)
+  map_y: 80 # (unit: m)
+  map_z: 40 # (unit: m)
+  voxel_depth: 1
+  block_depth: 2
+  near_distance_threshold: 35.0
+  far_distance_threshold: 38.0
+
+  min_valid_ratio_sub: 0.2
+  min_valid_ratio_voxel: 0.1
+
+  sub_radius_ratio: 0.1
+  voxel_radius_ratio: 0.1
+  block_radius_ratio: 0.5
+
+Probability:
+  # p_hit: 0.65
+  # p_miss: 0.35
+  # p_min: 0.10
+  # p_max: 0.97
+  # p_occ: 0.80
+  p_hit: 0.7
+  p_miss: 0.4
+  p_min: 0.12
+  p_max: 0.97
+  p_occ: 0.75
+
+DepthCamera:
+  # hku
+  height: 97
+  width: 353
+  fx: 250.20469969
+  fy: 60.53789576
+  cx: 176.0
+  cy: 48.0
+
+  k_depth_scaling_factor: 1
+  depth_maxdist: 40.0
+  depth_mindist: 0.1
+  depth_filter_margin: 20
+  skip_pixel: 4
+  min_valid_ratio: 0.1
+  depth_threshold_subvoxel: 0.2           # 体素z距离与像素平均值距离比较阈值
+  depth_threshold_voxel: 0.4            # 体素z距离与体素平均值距离比较阈值
+  depth_threshold_block: 0.2            # 体素z距离与体素平均值距离比较阈值
+
+  R_C_2_B: !!opencv-matrix #normal realsense
+    rows: 3
+    cols: 3
+    dt: d
+    data: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+
+  T_C_2_B: !!opencv-matrix
+    rows: 1
+    cols: 3
+    dt: d
+    data: [0.0, 0.0, 0.0]
