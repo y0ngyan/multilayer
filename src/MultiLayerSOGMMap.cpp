@@ -121,8 +121,8 @@ void SOGMMap::init(std::string filename)
     // double voxel_block_ratio = far_distance_threshold_ / map_x;
     // size_t initial_voxel_pool_size = static_cast<size_t>(std::ceil(total_blocks * total_voxel_in_block_ * voxel_block_ratio * 0.1));
     // size_t initial_voxel_pool_size = 10e5;
-    double expected_active_ratio = 0.05; // 预期只有5%的块会是活动的
-    double expected_voxel_ratio = 0.1;   // 预期只有10%的体素会被分配
+    double expected_active_ratio = 0.025; // 预期只有5%的块会是活动的
+    double expected_voxel_ratio = 0.05;   // 预期只有10%的体素会被分配
     size_t initial_voxel_pool_size = static_cast<size_t>(
         total_blocks * total_voxel_in_block_ * expected_active_ratio * expected_voxel_ratio
     );
@@ -615,7 +615,8 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                     already_marked = (flag_traverse_[block_linear_idx] == current_raycast);
                     
                     if (already_marked) {
-                        break; // 如果已处理过，则跳过
+                        // break; // 如果已处理过，则跳过
+                        continue;
                     }
                     
                     #pragma omp atomic write
@@ -672,7 +673,8 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                     already_marked = (flag_traverse_[block_linear_idx] == current_raycast);
                     
                     if (already_marked) {
-                        break; // 如果已处理过，则跳过
+                        // break; // 如果已处理过，则跳过
+                        continue;
                     }
                     
                     #pragma omp atomic write
@@ -735,22 +737,6 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
     
     // 更新处理的块数量统计
     processed_blocks_count_ = total_processed_count;
-}
-
-bool SOGMMap::isPointInDepthImage(const cv::Mat &depth_image, 
-        const Eigen::Matrix3d &R_W_2_C,
-        const Eigen::Vector3d &T_W_2_C, 
-        const Eigen::Vector3d &block_center){
-    Eigen::Vector3d block_camera = R_W_2_C * block_center + T_W_2_C;
-    // 忽略相机后方的体素
-    if (block_camera.z() <= 0) return false;
-    int u = static_cast<int>(fx_ * block_camera.x() / block_camera.z() + cx_);
-    int v = static_cast<int>(fy_ * block_camera.y() / block_camera.z() + cy_);
-
-    if (u < 0 || u >= depth_width_ || v < 0 || v >= depth_height_) {
-        return false;  // 超出图像范围
-    }
-    return true;
 }
 
 bool SOGMMap::isInDepthImage(const cv::Mat &depth_image, 
@@ -911,6 +897,77 @@ bool SOGMMap::isOccluded(const cv::Mat &depth_image,
     return voxel_z_min > sensor_z_max + depth_threshold;
 }
 
+VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image, 
+                                               const Eigen::Matrix3d &R_W_2_C,
+                                               const Eigen::Vector3d &T_W_2_C, 
+                                               const Eigen::Vector3d &voxel_center,
+                                               double resolution,
+                                               double valid_ratio,
+                                               double depth_threshold) {
+    // === 步骤 1: 计算体素在相机坐标系下的深度区间 ===
+    Eigen::Vector3d center_camera = R_W_2_C * voxel_center + T_W_2_C;
+
+    // 如果体素中心在相机后方，直接返回
+    if (center_camera.z() <= 0) {
+        return VoxelProjectionStatus::BEHIND_CAMERA;
+    }
+
+    // 使用解析法计算深度区间
+    double half_res = resolution / 2.0;
+    const Eigen::RowVector3d& Rz_row = R_W_2_C.row(2);
+    double extent = half_res * (Rz_row.lpNorm<1>());
+    double voxel_z_min = center_camera.z() - extent;
+    double voxel_z_max = center_camera.z() + extent;
+    
+    // === 步骤 2: 计算投影范围并检查是否在图像内 ===
+    double distance = center_camera.norm();
+    double radius = half_res * sqrt(3.0);
+    double min_azimuth, max_azimuth, min_elevation, max_elevation;
+    computeAngularBounds(center_camera, distance, radius, min_azimuth, max_azimuth, min_elevation, max_elevation);
+    
+    int min_u, min_v, max_u, max_v;
+    polarToPixel(min_azimuth, min_elevation, min_u, min_v);
+    polarToPixel(max_azimuth, max_elevation, max_u, max_v);
+    
+    if (min_u >= max_u || min_v >= max_v) {
+        return VoxelProjectionStatus::OUT_OF_IMAGE;
+    }
+
+    // 限制像素坐标在深度图尺寸内
+    min_u = std::max(0, std::min(min_u, depth_width_ - 1));
+    max_u = std::max(0, std::min(max_u, depth_width_ - 1));
+    min_v = std::max(0, std::min(min_v, depth_height_ - 1));
+    max_v = std::max(0, std::min(max_v, depth_height_ - 1));
+
+    // === 步骤 3: 获取传感器深度区间 ===
+    double sensor_z_min, sensor_z_max;
+    double ratio = 0.0;
+    
+    if (!getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max, 
+                         sensor_z_min, sensor_z_max, ratio, resolution)) {
+        return VoxelProjectionStatus::INSUFFICIENT_DATA;
+    }
+
+    if (ratio < valid_ratio) {
+        return VoxelProjectionStatus::INSUFFICIENT_DATA;
+    }
+
+    // === 步骤 4: 同时判断遮挡和匹配状态 ===
+    
+    // 判断是否被遮挡：体素完全在传感器测量值之前
+    if (voxel_z_min > sensor_z_max + depth_threshold) {
+        return VoxelProjectionStatus::OCCLUDED;
+    }
+    
+    // 判断是否匹配：体素深度区间与传感器深度区间有重叠
+    if (std::max(voxel_z_min, sensor_z_min) <= std::min(voxel_z_max, sensor_z_max) + depth_threshold) {
+        return VoxelProjectionStatus::MATCHED;
+    }
+    
+    // 否则就是不匹配
+    return VoxelProjectionStatus::NOT_MATCHED;
+}
+
 // 修改：更新占据值的辅助函数，使其既可以增加也可以减少
 void SOGMMap::updateOccupancyValue(float &value, bool &is_free, float update) {
     // 直接使用update值（可以是正值或负值）
@@ -1029,12 +1086,6 @@ void SOGMMap::propagateOccupancyDown(Block* block, float probability_value) {
     }
 }
 
-// void SOGMMap::switchLayerWithProject(int block_idx, const Eigen::Vector3d& sensor_pos, 
-//                           const cv::Mat& depth_image,
-//                           const Eigen::Matrix3d& R_W_2_C,
-//                           const Eigen::Vector3d& T_W_2_C,
-//                           std::vector<LayerVoxel>& layer_change_freed,
-//                           std::vector<LayerVoxel>& layer_change_occupied) {
 void SOGMMap::switchLayerWithProject(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
                           const Eigen::Matrix3d& R_W_2_C,
@@ -1411,13 +1462,11 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
     // 1. 处理自由空间块 - 多线程
     int free_count = free_blocks_.size();
     int blocks_per_thread = (free_count + num_projection_threads_ - 1) / num_projection_threads_;
+
+    // std::cout << "free_count: " << free_count << "occupied_count: " << occ_blocks_.size() << std::endl;
     
     std::vector<std::thread> free_threads;
     free_threads.reserve(num_projection_threads_);
-
-    // 用于存储各线程的层级变化信息
-    std::vector<std::vector<LayerVoxel>> thread_layer_change_freed(num_projection_threads_);
-    std::vector<std::vector<LayerVoxel>> thread_layer_change_occupied(num_projection_threads_);
     
     for (int t = 0; t < num_projection_threads_; ++t) {
         size_t start_idx = t * blocks_per_thread;
@@ -1428,7 +1477,7 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
             continue;
         }
         
-        free_threads.emplace_back([this, &thread_layer_change_freed, &thread_layer_change_occupied,
+        free_threads.emplace_back([this,
             &depth_image, &R_W_2_C, &T_W_2_C, &T_C_2_W, start_idx, end_idx, t]() {
             for (size_t i = start_idx; i < end_idx; ++i) {
                 int block_idx = free_blocks_[i];
@@ -1465,18 +1514,13 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                     std::vector<LayerVoxel> block_layer_occupied;
                     // switchLayerWithProject(block_idx, T_C_2_W, depth_image, R_W_2_C, T_W_2_C, block_layer_freed, block_layer_occupied);
                     switchLayerWithProject(block_idx, T_C_2_W, depth_image, R_W_2_C, T_W_2_C);
-                    // 将该块的层级变化信息添加到线程本地存储
-                    thread_layer_change_freed[t].insert(thread_layer_change_freed[t].end(),
-                                                  block_layer_freed.begin(), block_layer_freed.end());
-                    thread_layer_change_occupied[t].insert(thread_layer_change_occupied[t].end(),
-                                                    block_layer_occupied.begin(), block_layer_occupied.end());
 
                     // 重新获取块引用（因为switchLayer可能已修改了块）
                     block = blocks_[block_idx];
                     
                     // 根据层级更新占据概率
                     if (block->layer_ == LayerType::BLOCK) {
-                            updateOccupancyValue(block->occupancy_value_, block->is_free_, prob_miss_log_);
+                        updateOccupancyValue(block->occupancy_value_, block->is_free_, prob_miss_log_);
                     } 
                     else if (block->layer_ == LayerType::VOXEL) {
                         // 对每个体素更新概率
@@ -1488,15 +1532,26 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     Eigen::Vector3i voxel_grid_idx = localLinearToVoxelIdx(vox_idx, block_grid_idx);
                                     Eigen::Vector3d voxel_center;
                                     voxelIdxToWorld(voxel_grid_idx, voxel_center);
-                                    if (isInDepthImage(depth_image, R_W_2_C, T_W_2_C, voxel_center, voxel_radius_)) {
-                                        // 体素在深度图中，更新占据概率
-                                        if (isOccluded(depth_image, R_W_2_C, T_W_2_C, 
-                                                            voxel_center, voxel_res_, depth_threshold_voxel_)){                                    
-                                        }
-                                        else {
+
+                                    // 使用一次投影判断体素状态
+                                    VoxelProjectionStatus status = projectVoxelOnce(depth_image, R_W_2_C, T_W_2_C, 
+                                                                                voxel_center, voxel_res_, 
+                                                                                MIN_VALID_RATIO_VOXEL_, depth_threshold_voxel_);
+
+                                    switch (status) {
+                                        case VoxelProjectionStatus::OCCLUDED:
+                                        case VoxelProjectionStatus::MATCHED:
+                                        case VoxelProjectionStatus::BEHIND_CAMERA:
+                                        case VoxelProjectionStatus::OUT_OF_IMAGE:
+                                        case VoxelProjectionStatus::INSUFFICIENT_DATA:
+                                            // 被遮挡或匹配的体素不更新（保持当前状态）
+                                            continue;
+                                        case VoxelProjectionStatus::NOT_MATCHED:
+                                        default:
+                                            // 体素不在深度图中或不匹配，降低概率
                                             updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_miss_log_);
-                                        }
-                                    }
+                                            break;
+                                    }                                            
                                 }
                             }
                             // 向上传递更新后的占据信息
@@ -1519,15 +1574,27 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                         Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
                                         Eigen::Vector3d subvoxel_center;
                                         subVoxelIdxToWorld(subvoxel_grid_idx, subvoxel_center);
-                                        // 检查子体素是否在深度图像中
-                                        if (isOccluded(depth_image, R_W_2_C, T_W_2_C, 
-                                                            subvoxel_center, sub_voxel_res_, depth_threshold_subvoxel_)) {
-                                            // 子体素被遮挡，跳过更新
-                                            continue;
-                                        }
-                                        float &value = voxel->subvoxel_values_[subvox_idx];
-                                        float new_value = value + prob_miss_log_;
-                                        value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
+
+                                        // 使用一次投影判断子体素状态
+                                        VoxelProjectionStatus status = projectVoxelOnce(depth_image, R_W_2_C, T_W_2_C, 
+                                                                                    subvoxel_center, sub_voxel_res_, 
+                                                                                    MIN_VALID_RATIO_SUB_, depth_threshold_subvoxel_);
+                                        switch (status) {
+                                            case VoxelProjectionStatus::OCCLUDED:
+                                            case VoxelProjectionStatus::MATCHED:
+                                            case VoxelProjectionStatus::INSUFFICIENT_DATA:
+                                            case VoxelProjectionStatus::BEHIND_CAMERA:
+                                            case VoxelProjectionStatus::OUT_OF_IMAGE:
+                                                // 被遮挡或匹配的子体素不更新
+                                                continue;
+                                            case VoxelProjectionStatus::NOT_MATCHED:
+                                            default:
+                                                // 更新为miss概率
+                                                float &value = voxel->subvoxel_values_[subvox_idx];
+                                                float new_value = value + prob_miss_log_;
+                                                value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
+                                                break;
+                                        }                                            
                                     }
                                 }
                             }
@@ -1572,7 +1639,7 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
             continue;
         }
         
-        occ_threads.emplace_back([this, &thread_layer_change_freed, &thread_layer_change_occupied,
+        occ_threads.emplace_back([this,
             &depth_image, &R_W_2_C, &T_W_2_C, &T_C_2_W, start_idx, end_idx, t]() {
             for (size_t i = start_idx; i < end_idx; ++i) {
                 int block_idx = occ_blocks_[i];
@@ -1597,29 +1664,24 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                     std::vector<LayerVoxel> block_layer_occupied;
                     bool need_update = switchLayerWithProjectWithUpdateGlobal(block_idx, T_C_2_W, depth_image, R_W_2_C, T_W_2_C);
 
-                    {
-                        std::lock_guard<std::mutex> lock(active_indices_mutex_); // 加锁
-                        if (!block->is_free()) {
-                            active_block_indices_.insert(block_idx);
-                        } 
-                        else {
-                            active_block_indices_.erase(block_idx);
-                        }
-                    } // 锁在此处自动释放
-
-                    // 将该块的层级变化信息添加到线程本地存储
-                    thread_layer_change_freed[t].insert(thread_layer_change_freed[t].end(),
-                                                  block_layer_freed.begin(), block_layer_freed.end());
-                    thread_layer_change_occupied[t].insert(thread_layer_change_occupied[t].end(),
-                                                    block_layer_occupied.begin(), block_layer_occupied.end());
+                    if (!need_update) {
+                        {
+                            std::lock_guard<std::mutex> lock(active_indices_mutex_); // 加锁
+                            if (!block->is_free()) {
+                                active_block_indices_.insert(block_idx);
+                            } 
+                            else {
+                                active_block_indices_.erase(block_idx);
+                            }
+                        } // 锁在此处自动释放
+                        continue;
+                    }
                     
                     // 重新获取块引用（因为switchLayer可能已修改了块）
                     block = blocks_[block_idx];
 
                     // 根据层级进行处理
                     bool block_updated = false;
-                    
-                    if (need_update) {
 
                     if (block->layer_ == LayerType::BLOCK) {
                         // Block层级：直接增加占据概率
@@ -1696,7 +1758,6 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                 propagateOccupancyUp(block);
                             }
                         }
-                    }
                     }
                     {
                         std::lock_guard<std::mutex> lock(active_indices_mutex_); // 加锁

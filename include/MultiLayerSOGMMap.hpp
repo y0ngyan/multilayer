@@ -42,6 +42,15 @@ enum class LayerType : uint8_t
     SUBVOXEL,
 };
 
+enum class VoxelProjectionStatus {
+    BEHIND_CAMERA,      // 在相机后方
+    OUT_OF_IMAGE,       // 超出图像范围
+    INSUFFICIENT_DATA,  // 深度数据不足
+    OCCLUDED,          // 被遮挡
+    MATCHED,           // 匹配（在深度图中且深度一致）
+    NOT_MATCHED        // 不匹配（在深度图中但深度不一致）
+};
+
 class Voxel;    // 前向声明Voxel类
 template <typename T>
 class ObjectPool; // 前向声明ObjectPool模板类
@@ -309,6 +318,13 @@ private:
                                              bool is_hit_block,
                                              std::vector<LayerVoxel>& layer_change_freed,
                                              std::vector<LayerVoxel>& layer_change_occupied);
+    VoxelProjectionStatus projectVoxelOnce(const cv::Mat &depth_image, 
+                                               const Eigen::Matrix3d &R_W_2_C,
+                                               const Eigen::Vector3d &T_W_2_C, 
+                                               const Eigen::Vector3d &voxel_center,
+                                               double resolution,
+                                               double valid_ratio,
+                                               double depth_threshold);
 public:
     SOGMMap();
     ~SOGMMap();
