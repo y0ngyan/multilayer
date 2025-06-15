@@ -1,13 +1,13 @@
 <launch>
 
-    <node pkg="multilayer" name="multilayer_node" type="multilayer_node" output="screen">
+    <node pkg="multilayer" name="pointcloud_multilayer_node" type="pointcloud_multilayer_node" output="screen">
 
         <remap from="/odom" to="/aft_mapped_to_init"/>
-        <remap from="/depth" to="/depth_image"/>
+        <!-- <remap from="/depth" to="/depth_image"/> -->
         <remap from="/pointcloud" to="/livox/pointcloud2"/>
 
-        <param name="frame_id" value="camera_init" type="string"/>
-        <param name="child_frame_id" value="aft_mapped" type="string"/>
+        <param name="frame_id" value="map" type="string"/>
+        <param name="child_frame_id" value="base_link" type="string"/>
 
         <param name="/paramfile/path" value="$(find multilayer)/config/pointcloud_multilayer_map.yaml" type="string"/>
 

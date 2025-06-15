@@ -1,5 +1,6 @@
 #include <iostream>
 #include <memory>
+#include <cmath>
 #include <Eigen/Eigen>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -62,25 +63,25 @@ ros::Timer map_update_timer_;
 ros::Timer map_vis_timer_;
 std::mutex map_mutex_;        // <<-- 用于保护共享对象 map_ 的互斥锁
 
-// 修改同步策略为三个话题的同步
-typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::PointCloud2, sensor_msgs::Image, nav_msgs::Odometry> SyncPolicyPointCloudDepthOdom;
-typedef std::shared_ptr<message_filters::Synchronizer<SyncPolicyPointCloudDepthOdom>> SynchronizerPointCloudDepthOdom;
-SynchronizerPointCloudDepthOdom sync_pointcloud_depth_odom_;
-// 三个智能指针，分别指向点云、深度图像和里程计数据的订阅者
+// 修改同步策略为两个话题的同步：点云和里程计
+typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::PointCloud2, nav_msgs::Odometry> SyncPolicyPointCloudOdom;
+typedef std::shared_ptr<message_filters::Synchronizer<SyncPolicyPointCloudOdom>> SynchronizerPointCloudOdom;
+SynchronizerPointCloudOdom sync_pointcloud_odom_;
+// 两个智能指针，分别指向点云和里程计数据的订阅者
 std::shared_ptr<message_filters::Subscriber<sensor_msgs::PointCloud2>> pointcloud_sub_;
-std::shared_ptr<message_filters::Subscriber<sensor_msgs::Image>> depth_sub_;
 std::shared_ptr<message_filters::Subscriber<nav_msgs::Odometry>> odom_sub_;
 
 // for visualization
 // 发布滑动窗口大小
 ros::Publisher slide_global_map_range_pub_, local_update_range_pub_; // the sliding window size
-// 发布滑动窗口占用体素
-ros::Publisher slide_global_occ_pub_;                                // the sliding window size
 
 // 多分辨率占据和空闲区域
 // ros::Publisher multi_res_occ_pub_, multi_res_free_pub_;
 // 新增的Publisher，用于发布局部地图的完整状态
 ros::Publisher local_map_state_pub_; 
+
+// 可选的深度图发布器，用于调试
+ros::Publisher generated_depth_pub_;
 
 bool depth_need_update_;
 Eigen::Vector3d local_map_boundary_min_, local_map_boundary_max_;
@@ -173,40 +174,6 @@ void publishSlideGlobalGridMapRange()
     slide_global_map_range_pub_.publish(mk);
 }
 
-// void publishMultiResolutionOccupancy() {
-//     multilayer::VoxelGridMsgArray occ_msg;
-//     occ_msg.header.frame_id = frame_id_;
-//     occ_msg.header.stamp = ros::Time::now();
-    
-//     // 获取多层级占据体素
-//     const auto& occupied_voxels = map_.getNewOccupiedLayerVoxels();
-    
-//     // 填充消息
-//     std::vector<multilayer::VoxelGridMsg> occ_msg_array;
-//     map_.fillVoxelGridMsg(occ_msg_array, occupied_voxels);
-//     occ_msg.voxels = occ_msg_array;
-    
-//     // 发布消息
-//     multi_res_occ_pub_.publish(occ_msg);
-// }
-
-// void publishMultiResolutionFree() {
-//     multilayer::VoxelGridMsgArray free_msg;
-//     free_msg.header.frame_id = frame_id_;
-//     free_msg.header.stamp = ros::Time::now();
-    
-//     // 获取多层级空闲体素
-//     const auto& freed_voxels = map_.getNewFreedLayerVoxels();
-    
-//     // 填充消息
-//     std::vector<multilayer::VoxelGridMsg> free_msg_array;
-//     map_.fillVoxelGridMsg(free_msg_array, freed_voxels);
-//     free_msg.voxels = free_msg_array;
-    
-//     // 发布消息
-//     multi_res_free_pub_.publish(free_msg);
-// }
-
 // 发布全局占据地图的点云数据
 void publishSlideGlobalOccMap()
 {
@@ -248,18 +215,77 @@ void publishSlideGlobalOccMap()
 
     sensor_msgs::PointCloud2 cloud_msg;
     pcl::toROSMsg(cloud, cloud_msg);
-    slide_global_occ_pub_.publish(cloud_msg);
 }
 
 /**
- * @brief 点云、深度图和里程计数据的回调函数
+ * @brief 将点云转换为深度图
+ * @param cloud_pcl 输入的PCL点云
+ * @param R_C_2_W 相机到世界坐标系的旋转矩阵
+ * @param T_C_2_W 相机到世界坐标系的平移向量
+ * @return 生成的深度图
+ */
+cv::Mat convertPointCloudToDepthImage(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud_pcl,
+                                      const Eigen::Matrix3d& R_C_2_W,
+                                      const Eigen::Vector3d& T_C_2_W)
+{
+    // 初始化深度图
+    cv::Mat depth_image = cv::Mat::zeros(camData_.depth_heigth, camData_.depth_width, CV_32FC1);
+    
+    // 处理点云中的每个点
+    for (const auto& point : cloud_pcl->points)
+    {
+        // 检查点是否有效（非NaN）
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            continue;
+        
+        // 将点从激光雷达坐标系转换到相机坐标系
+        Eigen::Vector3d pt_camera(-point.y, -point.z, point.x);
+        
+        // 过滤相机后方的点
+        if (pt_camera.z() <= 0)
+            continue;
+        
+        // 计算距离并过滤超出范围的点
+        double distance = pt_camera.norm();
+        if (distance < camData_.depth_mindist || distance > camData_.depth_maxdist)
+            continue;
+        
+        // 使用针孔相机模型投影到像素坐标
+        double u = camData_.fx * (pt_camera.x() / pt_camera.z()) + camData_.cx;
+        double v = camData_.fy * (pt_camera.y() / pt_camera.z()) + camData_.cy;
+        
+        // 转换为整数像素坐标
+        int u_int = static_cast<int>(std::round(u));
+        int v_int = static_cast<int>(std::round(v));
+        
+        // 检查是否在图像范围内
+        if (u_int >= 0 && u_int < camData_.depth_width && v_int >= 0 && v_int < camData_.depth_heigth)
+        {
+            // 获取当前像素的深度值
+            float& current_depth = depth_image.at<float>(v_int, u_int);
+            
+            // 如果当前像素没有深度值，或者新的深度值更近，则更新
+            if (current_depth == 0.0f || pt_camera.z() < current_depth)
+            {
+                current_depth = static_cast<float>(pt_camera.z());
+            }
+        }
+    }
+    
+    // 转换为16位无符号整型（与原始深度图格式匹配）
+    cv::Mat depth_image_16u;
+    depth_image.convertTo(depth_image_16u, CV_16UC1, camData_.k_depth_scaling_factor);
+    
+    return depth_image_16u;
+}
+
+/**
+ * @brief 点云和里程计数据的回调函数
  * @param cloud_msg 点云数据
- * @param img 深度图像
  * @param odom 里程计数据
  */
-void pointCloudDepthOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg, 
-                                const sensor_msgs::ImageConstPtr &img,
-                                const nav_msgs::OdometryConstPtr &odom)
+void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg, 
+                           const nav_msgs::OdometryConstPtr &odom)
 {
     // 从里程计数据中提取相机的位置和姿态
     camData_.camera_pos(0) = odom->pose.pose.position.x;
@@ -287,16 +313,6 @@ void pointCloudDepthOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_m
                                               tf::Vector3(camData_.T_C_2_W(0), camData_.T_C_2_W(1), camData_.T_C_2_W(2))),
                                           odom->header.stamp, frame_id_, child_frame_id_));
 
-    /* 处理深度图像 */
-    cv_bridge::CvImagePtr cv_ptr;
-    cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
-    // 应用深度缩放因子，将深度图像转换为16位无符号整型
-    if (img->encoding == sensor_msgs::image_encodings::TYPE_32FC1)
-    {
-        (cv_ptr->image).convertTo(cv_ptr->image, CV_16UC1, camData_.k_depth_scaling_factor);
-    }
-    cv_ptr->image.copyTo(camData_.depth_image);
-
     // 清空之前的点云数据
     camData_.ptws_hit.clear();
     camData_.ptws_miss.clear();
@@ -304,6 +320,25 @@ void pointCloudDepthOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_m
     // 将ROS点云消息转换为PCL点云
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*cloud_msg, *cloud_pcl);
+
+    // 从点云生成深度图
+    camData_.depth_image = convertPointCloudToDepthImage(cloud_pcl, camData_.R_C_2_W, camData_.T_C_2_W);
+
+    // 发布生成的深度图（用于调试）
+    if (generated_depth_pub_.getNumSubscribers() > 0)
+    {
+        cv::Mat depth_image_32f;
+        camData_.depth_image.convertTo(depth_image_32f, CV_32FC1, 1.0 / camData_.k_depth_scaling_factor);
+        
+        sensor_msgs::Image depth_msg;
+        cv_bridge::CvImage cv_bridge_image;
+        cv_bridge_image.header.stamp = odom->header.stamp;
+        cv_bridge_image.header.frame_id = frame_id_;
+        cv_bridge_image.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
+        cv_bridge_image.image = depth_image_32f;
+        cv_bridge_image.toImageMsg(depth_msg);
+        generated_depth_pub_.publish(depth_msg);
+    }
 
     // 初始化局部地图边界
     if (true)
@@ -432,25 +467,23 @@ void visualizeMapCallback(const ros::TimerEvent &)
 
 
 /**
- * @brief 从 YAML 文件中设置相机参数。
+ * @brief 从 YAML 文件中设置激光雷达参数并计算对应的深度图参数。
  *
- * 该函数从指定的 YAML 文件中读取相机参数，并使用这些参数初始化相机数据结构。
- * 它期望 YAML 文件包含一个名为 "DepthCamera" 的节点，该节点具有以下字段：
- * - heigth: 深度相机图像的高度。
- * - width: 深度相机图像的宽度。
- * - fx: 深度相机在 x 方向上的焦距。
- * - fy: 深度相机在 y 方向上的焦距。
- * - cx: 深度相机在 x 方向上的主点。
- * - cy: 深度相机在 y 方向上的主点。
- * - k_depth_scaling_factor: 深度值的缩放因子。
- * - depth_maxdist: 深度相机可测量的最大距离。
- * - depth_mindist: 深度相机可测量的最小距离。
- * - depth_filter_margin: 深度过滤的边距。
- * - skip_pixel: 处理过程中跳过的像素数。
- * - R_C_2_B: 从相机坐标系到机体坐标系的旋转矩阵。
- * - T_C_2_B: 从相机坐标系到机体坐标系的平移向量。
+ * 该函数从指定的 YAML 文件中读取激光雷达参数，并使用这些参数计算对应的深度图参数。
+ * 它期望 YAML 文件包含一个名为 "LiDAR" 的节点，该节点具有以下字段：
+ * - fov_theta_range: 水平视场角范围 [min, max] (度)
+ * - fov_phi_range: 垂直视场角范围 [min, max] (度)
+ * - fov_depth: 最大探测距离 (米)
+ * - sensor_res_hor: 水平分辨率 (度)
+ * - sensor_res_vert: 垂直分辨率 (度)
+ * - depth_mindist: 最小探测距离 (米)
+ * - depth_filter_margin: 深度过滤的边距
+ * - skip_pixel: 处理过程中跳过的像素数
+ * - k_depth_scaling_factor: 深度值的缩放因子
+ * - R_C_2_B: 从相机坐标系到机体坐标系的旋转矩阵
+ * - T_C_2_B: 从相机坐标系到机体坐标系的平移向量
  *
- * @param filename 包含相机参数的 YAML 文件的路径。
+ * @param filename 包含激光雷达参数的 YAML 文件的路径。
  */
 void setCameraParam(std::string filename)
 {
@@ -460,19 +493,46 @@ void setCameraParam(std::string filename)
         std::cerr << "**ERROR CAN NOT OPEN YAML FILE**" << std::endl;
     }
 
-    cv::FileNode yaml_node = fs["DepthCamera"];
-    camData_.depth_heigth = (int)(yaml_node["height"]);
-    camData_.depth_width = (int)(yaml_node["width"]);
-    camData_.fx = (double)(yaml_node["fx"]);
-    camData_.fy = (double)(yaml_node["fy"]);
-    camData_.cx = (double)(yaml_node["cx"]);
-    camData_.cy = (double)(yaml_node["cy"]);
+    cv::FileNode yaml_node = fs["LiDAR"];
+    
+    // 读取激光雷达参数
+    cv::FileNode fov_theta_node = yaml_node["fov_theta_range"];
+    cv::FileNode fov_phi_node = yaml_node["fov_phi_range"];
+    
+    double fov_theta_min = (double)fov_theta_node[0];
+    double fov_theta_max = (double)fov_theta_node[1];
+    double fov_phi_min = (double)fov_phi_node[0];
+    double fov_phi_max = (double)fov_phi_node[1];
+    
+    double fov_depth = (double)yaml_node["fov_depth"];
+    double sensor_res_hor = (double)yaml_node["sensor_res_hor"];
+    double sensor_res_vert = (double)yaml_node["sensor_res_vert"];
+    
+    // 计算深度图尺寸（参考point2depth.py的计算方法）
+    camData_.depth_width = static_cast<int>((fov_theta_max - fov_theta_min) / sensor_res_hor) + 1;
+    camData_.depth_heigth = static_cast<int>((fov_phi_max - fov_phi_min) / sensor_res_vert) + 1;
+    
+    // 计算相机内参（参考point2depth.py的计算方法）
+    // 将视场角转换为弧度
+    double fov_h_rad = (fov_theta_max - fov_theta_min) * M_PI / 180.0;
+    double fov_v_rad = (fov_phi_max - fov_phi_min) * M_PI / 180.0;
+    
+    // 使用针孔相机模型计算焦距
+    camData_.fx = camData_.depth_width / (2.0 * tan(fov_h_rad / 2.0));
+    camData_.fy = camData_.depth_heigth / (2.0 * tan(fov_v_rad / 2.0));
+    
+    // 主点设置为图像中心
+    camData_.cx = (camData_.depth_width - 1) / 2.0;
+    camData_.cy = (camData_.depth_heigth - 1) / 2.0;
 
+    // 读取其他参数
     camData_.k_depth_scaling_factor = (double)(yaml_node["k_depth_scaling_factor"]);
-    camData_.depth_maxdist = (double)(yaml_node["depth_maxdist"]);
+    camData_.depth_maxdist = fov_depth;  // 使用激光雷达的最大探测距离
     camData_.depth_mindist = (double)(yaml_node["depth_mindist"]);
     camData_.depth_filter_margin = (double)(yaml_node["depth_filter_margin"]);
     camData_.skip_pixel = (double)(yaml_node["skip_pixel"]);
+
+    std::cout << "[LiDAR INIT] 从 YAML 文件中读取激光雷达参数" << std::endl;
 
     cv::Mat rc2b, tc2b;
     yaml_node["R_C_2_B"] >> rc2b;
@@ -481,35 +541,24 @@ void setCameraParam(std::string filename)
     cv::cv2eigen(rc2b, camData_.R_C_2_B);
     cv::cv2eigen(tc2b, camData_.T_C_2_B);
 
-    // 读取frame ID参数，如果不存在则使用默认值
-    frame_id_ = (std::string)(yaml_node["frame_id"]);
-    child_frame_id_ = (std::string)(yaml_node["child_frame_id"]);
-    
-    // 如果YAML文件中没有指定，使用默认值
-    if (frame_id_.empty()) {
-        frame_id_ = "map";
-    }
-    if (child_frame_id_.empty()) {
-        child_frame_id_ = "base_link";
-    }
-
-    std::cout << "[CameraParam INIT] use depth camera" << std::endl;
-    std::cout << "[CameraParam INIT] depth heigth: " << camData_.depth_heigth << std::endl;
-    std::cout << "[CameraParam INIT] depth width: " << camData_.depth_width << std::endl;
-    std::cout << "[CameraParam INIT] depth fx: " << camData_.fx << std::endl;
-    std::cout << "[CameraParam INIT] depth fy: " << camData_.fy << std::endl;
-    std::cout << "[CameraParam INIT] depth cx: " << camData_.cx << std::endl;
-    std::cout << "[CameraParam INIT] depth cy: " << camData_.cy << std::endl;
-    std::cout << "[CameraParam INIT] depth k_depth_scaling_factor: " << camData_.k_depth_scaling_factor << std::endl;
-    std::cout << "[CameraParam INIT] depth depth_maxdist: " << camData_.depth_maxdist << std::endl;
-    std::cout << "[CameraParam INIT] depth depth_mindist: " << camData_.depth_mindist << std::endl;
-    std::cout << "[CameraParam INIT] depth depth_filter_margin: " << camData_.depth_filter_margin << std::endl;
-    std::cout << "[CameraParam INIT] depth skip_pixel: " << camData_.skip_pixel << std::endl;
-    std::cout << "[CameraParam INIT] frame_id: " << frame_id_ << std::endl;
-    std::cout << "[CameraParam INIT] child_frame_id: " << child_frame_id_ << std::endl;
-    std::cout << "[CameraParam INIT] R_C_2_B: \n"
+    std::cout << "[LiDAR INIT] 激光雷达参数初始化" << std::endl;
+    std::cout << "[LiDAR INIT] 水平视场角范围: [" << fov_theta_min << ", " << fov_theta_max << "] 度" << std::endl;
+    std::cout << "[LiDAR INIT] 垂直视场角范围: [" << fov_phi_min << ", " << fov_phi_max << "] 度" << std::endl;
+    std::cout << "[LiDAR INIT] 最大探测距离: " << fov_depth << " 米" << std::endl;
+    std::cout << "[LiDAR INIT] 水平分辨率: " << sensor_res_hor << " 度" << std::endl;
+    std::cout << "[LiDAR INIT] 垂直分辨率: " << sensor_res_vert << " 度" << std::endl;
+    std::cout << "[LiDAR INIT] 计算的深度图尺寸: " << camData_.depth_width << " x " << camData_.depth_heigth << std::endl;
+    std::cout << "[LiDAR INIT] 计算的相机内参:" << std::endl;
+    std::cout << "[LiDAR INIT] fx: " << camData_.fx << ", fy: " << camData_.fy << std::endl;
+    std::cout << "[LiDAR INIT] cx: " << camData_.cx << ", cy: " << camData_.cy << std::endl;
+    std::cout << "[LiDAR INIT] depth_maxdist: " << camData_.depth_maxdist << std::endl;
+    std::cout << "[LiDAR INIT] depth_mindist: " << camData_.depth_mindist << std::endl;
+    std::cout << "[LiDAR INIT] depth_filter_margin: " << camData_.depth_filter_margin << std::endl;
+    std::cout << "[LiDAR INIT] skip_pixel: " << camData_.skip_pixel << std::endl;
+    std::cout << "[LiDAR INIT] k_depth_scaling_factor: " << camData_.k_depth_scaling_factor << std::endl;
+    std::cout << "[LiDAR INIT] R_C_2_B: \n"
               << camData_.R_C_2_B << std::endl;
-    std::cout << "[CameraParam INIT] T_C_2_B: " << camData_.T_C_2_B.transpose() << std::endl;
+    std::cout << "[LiDAR INIT] T_C_2_B: " << camData_.T_C_2_B.transpose() << std::endl;
 }
 
 /**
@@ -537,32 +586,47 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "sogm_map");
     ros::NodeHandle node("~");
 
+    node.param<std::string>("frame_id", frame_id_, "map");
+    node.param<std::string>("child_frame_id", child_frame_id_, "base_link");
+
     std::string filename;
     node.param<std::string>("paramfile/path", filename, "./src/gridmap/config/sogm_map.yaml");
     std::cout << "parameter file: " << filename << std::endl;
 
+    std::cout << "[SOGM Map] map initialized00" << std::endl;
     map_.init(filename);
-
+    std::cout << "[SOGM Map] map initialized" << std::endl;
     setCameraParam(filename);
+    
+    map_.setCameraParameters(
+        camData_.fx, camData_.fy, camData_.cx, camData_.cy,
+        camData_.depth_width, camData_.depth_heigth,
+        camData_.k_depth_scaling_factor,
+        camData_.depth_maxdist,
+        camData_.depth_mindist,
+        camData_.skip_pixel,
+        camData_.R_C_2_B, camData_.T_C_2_B
+    );
 
     map_update_timer_ = node.createTimer(ros::Duration(0.05), updateMapCallback);
     map_vis_timer_ = node.createTimer(ros::Duration(1.0), visualizeMapCallback);
 
-    // 修改订阅者为三个话题：点云、深度图、里程计
+    // 修改订阅者为两个话题：点云和里程计
     pointcloud_sub_.reset(new message_filters::Subscriber<sensor_msgs::PointCloud2>(node, "/pointcloud", 1));
-    depth_sub_.reset(new message_filters::Subscriber<sensor_msgs::Image>(node, "/depth", 1));
     odom_sub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(node, "/odom", 1));
-    sync_pointcloud_depth_odom_.reset(new message_filters::Synchronizer<SyncPolicyPointCloudDepthOdom>(
-        SyncPolicyPointCloudDepthOdom(200), *pointcloud_sub_, *depth_sub_, *odom_sub_));
-    sync_pointcloud_depth_odom_->registerCallback(boost::bind(pointCloudDepthOdomCallback, _1, _2, _3));
+    sync_pointcloud_odom_.reset(new message_filters::Synchronizer<SyncPolicyPointCloudOdom>(
+        SyncPolicyPointCloudOdom(200), *pointcloud_sub_, *odom_sub_));
+    sync_pointcloud_odom_->registerCallback(boost::bind(pointCloudOdomCallback, _1, _2));
 
     // 发布局部更新范围、滑动窗口范围、新占据区域和新空闲区域的话题
     local_update_range_pub_ = node.advertise<visualization_msgs::Marker>("/map/range/local", 10);
     slide_global_map_range_pub_ = node.advertise<visualization_msgs::Marker>("/map/range/slide", 10);
-    // TODO！！这个话题没有获得对应的消息
-    // 运行程序后，在rviz中该信息并没有对应的可视化
-    // DONE！！！
-    slide_global_occ_pub_ = node.advertise<sensor_msgs::PointCloud2>("/map/sogm", 10);
+
+    // 添加新的发布器，用于发布局部地图状态
+    local_map_state_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/local_state", 10);
+    
+    // 可选的深度图发布器，用于调试
+    generated_depth_pub_ = node.advertise<sensor_msgs::Image>("/generated_depth", 10);
 
     depth_need_update_ = false;
 

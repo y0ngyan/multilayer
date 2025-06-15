@@ -67,10 +67,9 @@ find_package(Eigen3 REQUIRED)
 link_directories(${PCL_LIBRARY_DIRS})
 
 add_library(multilayer_lib
-  include/GlobalGridMap.hpp
+  include/ObjectPool.hpp
   include/MultiLayerSOGMMap.hpp
   include/RayCast.hpp
-  src/GlobalGridMap.cpp
   src/MultiLayerSOGMMap.cpp
   src/RayCast.cpp
 )
@@ -89,9 +88,6 @@ target_link_libraries(multilayer_lib
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )
-
-add_executable(global_gridmap_node test/global_gridmap_node.cpp)
-target_link_libraries(global_gridmap_node multilayer_lib)
 
 add_executable(multilayer_node test/multilayer_node.cpp)
 target_link_libraries(multilayer_node multilayer_lib)

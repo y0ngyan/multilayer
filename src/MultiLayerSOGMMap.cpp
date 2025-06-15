@@ -108,6 +108,8 @@ void SOGMMap::init(std::string filename)
     
     block_num_x_ = block_num_[0];
     block_num_xy_ = block_num_x_ * block_num_[1];
+    block_num_z_ = block_num_[2];
+    block_num_yz_ = block_num_[1] * block_num_z_;
     
     // 初始化相机位置为原点
     camera_pos_ = Eigen::Vector3d(0, 0, 0);
@@ -125,20 +127,11 @@ void SOGMMap::init(std::string filename)
     std::cout << "[SOGMMap] Creating block pool with " << total_blocks << " blocks" << std::endl;
     block_pool_ = std::make_unique<ObjectPool<Block>>(total_blocks);
 
-    // double voxel_block_ratio = far_distance_threshold_ / map_x;
-    // size_t initial_voxel_pool_size = static_cast<size_t>(std::ceil(total_blocks * total_voxel_in_block_ * voxel_block_ratio * 0.1));
-    // size_t initial_voxel_pool_size = 10e5;
     double expected_active_ratio = 0.025; // 预期只有5%的块会是活动的
     double expected_voxel_ratio = 0.05;   // 预期只有10%的体素会被分配
     size_t initial_voxel_pool_size = static_cast<size_t>(
         total_blocks * total_voxel_in_block_ * expected_active_ratio * expected_voxel_ratio
     );
-    // size_t initial_voxel_pool_size = static_cast<size_t>(
-    //     total_blocks * total_voxel_in_block_ * expected_voxel_ratio
-    // );
-    // 设置最小和最大值
-    // initial_voxel_pool_size = std::max(initial_voxel_pool_size, static_cast<size_t>(10000));
-    // initial_voxel_pool_size = std::min(initial_voxel_pool_size, static_cast<size_t>(1000000));
     std::cout << "[SOGMMap] Creating voxel pool with " << initial_voxel_pool_size << " voxels" << std::endl;
     voxel_pool_ = std::make_unique<ObjectPool<Voxel>>(initial_voxel_pool_size);
     
@@ -162,30 +155,6 @@ void SOGMMap::init(std::string filename)
 
     flag_traverse_ = std::vector<char>(total_blocks, 0);
     flag_rayend_ = std::vector<char>(total_blocks, 0);
-
-    // 读取相机参数
-    cv::FileNode DepthCamera_node = fs["DepthCamera"];
-    depth_maxdist_ = (double)(DepthCamera_node["depth_maxdist"]);
-    depth_mindist_ = (double)(DepthCamera_node["depth_mindist"]);
-    skip_pixel_ = (int)(DepthCamera_node["skip_pixel"]);
-
-    // 读取相机内参
-    depth_height_ = (int)(DepthCamera_node["height"]);
-    depth_width_ = (int)(DepthCamera_node["width"]);
-    fx_ = (double)(DepthCamera_node["fx"]);
-    fy_ = (double)(DepthCamera_node["fy"]);
-    cx_ = (double)(DepthCamera_node["cx"]);
-    cy_ = (double)(DepthCamera_node["cy"]);
-    k_depth_scaling_factor_ = (double)(DepthCamera_node["k_depth_scaling_factor"]);
-    // 预计算深度缩放因子的倒数
-    inv_depth_scaling_factor_ = 1.0 / k_depth_scaling_factor_;
-
-    // 读取相机外参
-    cv::Mat rc2b, tc2b;
-    DepthCamera_node["R_C_2_B"] >> rc2b;
-    DepthCamera_node["T_C_2_B"] >> tc2b;
-    cv::cv2eigen(rc2b, R_C_2_B_);
-    cv::cv2eigen(tc2b, T_C_2_B_);
     
     // 设置多线程投影的线程数
     num_projection_threads_ = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
@@ -223,6 +192,27 @@ void SOGMMap::init(std::string filename)
     std::cout << "[SOGMMap] 块数量: " << block_num_.transpose() << " 总块数: " << total_blocks << std::endl;
     
     fs.release();
+}
+
+void SOGMMap::setCameraParameters(double fx, double fy, double cx, double cy, 
+        int depth_width, int depth_height,
+        double k_depth_scaling_factor, double depth_maxdist, 
+        double depth_mindist, int skip_pixel,
+        Eigen::Matrix3d R_C_2_B, Eigen::Vector3d T_C_2_B) {
+    fx_ = fx;
+    fy_ = fy;
+    cx_ = cx;
+    cy_ = cy;
+    depth_width_ = depth_width;
+    depth_height_ = depth_height;
+    k_depth_scaling_factor_ = k_depth_scaling_factor;
+    inv_depth_scaling_factor_ = 1.0 / k_depth_scaling_factor_;
+    depth_maxdist_ = depth_maxdist;
+    depth_mindist_ = depth_mindist;
+    skip_pixel_ = skip_pixel;
+
+    R_C_2_B_ = R_C_2_B;
+    T_C_2_B_ = T_C_2_B;
 }
 
 void SOGMMap::update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr,
@@ -427,6 +417,87 @@ bool SOGMMap::isOccupied(const int index)
     }
     Block *block = blocks_[index];
     return !block->is_free();
+}
+
+bool SOGMMap::isOccupiedPrecise(const Eigen::Vector3d& pos)
+{
+    // 1. 先检查块级别
+    Eigen::Vector3i block_idx;
+    worldToBlockIdx(pos, block_idx);
+    int block_linear_idx;
+    blockIdxToLocalLinear(block_idx, block_linear_idx);
+    
+    if (block_linear_idx < 0 || block_linear_idx >= blocks_.size() || blocks_[block_linear_idx] == nullptr)
+    {
+        return false; // Invalid block index
+    }
+    
+    Block *block = blocks_[block_linear_idx];
+    
+    // 如果块是空闲的，直接返回false
+    if (block->is_free()) {
+        return false;
+    }
+    
+    // 2. 根据块的层级进行精确检查
+    switch (block->layer_) {
+        case LayerType::BLOCK: {
+            // 块级别：直接返回块的占据状态
+            return !block->is_free();
+        }
+        
+        case LayerType::VOXEL: {
+            if (!block->is_voxel_allocated_) {
+                return !block->is_free();
+            }
+            
+            // 体素级别：检查对应体素的占据状态
+            Eigen::Vector3i voxel_idx;
+            worldToVoxelIdx(pos, voxel_idx);
+            int local_voxel_idx;
+            voxelIdxToLocalLinear(voxel_idx, local_voxel_idx);
+            
+            if (local_voxel_idx >= 0 && local_voxel_idx < block->voxels_.size() && 
+                block->voxels_[local_voxel_idx] != nullptr) {
+                return !block->voxels_[local_voxel_idx]->is_free();
+            }
+            return false;
+        }
+        
+        case LayerType::SUBVOXEL: {
+            if (!block->is_voxel_allocated_) {
+                return !block->is_free();
+            }
+            
+            // 子体素级别：检查对应子体素的占据状态
+            Eigen::Vector3i voxel_idx;
+            worldToVoxelIdx(pos, voxel_idx);
+            int local_voxel_idx;
+            voxelIdxToLocalLinear(voxel_idx, local_voxel_idx);
+            
+            if (local_voxel_idx >= 0 && local_voxel_idx < block->voxels_.size() && 
+                block->voxels_[local_voxel_idx] != nullptr) {
+                
+                Voxel* voxel = block->voxels_[local_voxel_idx];
+                if (!voxel->is_subvoxel_allocated_) {
+                    return !voxel->is_free();
+                }
+                
+                // 检查子体素
+                Eigen::Vector3i subvoxel_idx;
+                worldToSubVoxelIdx(pos, subvoxel_idx);
+                int local_subvoxel_idx;
+                subVoxelIdxToLocalLinear(subvoxel_idx, local_subvoxel_idx);
+                
+                if (local_subvoxel_idx >= 0 && local_subvoxel_idx < voxel->subvoxel_values_.size()) {
+                    return voxel->subvoxel_values_[local_subvoxel_idx] >= min_occupancy_log_;
+                }
+            }
+            return false;
+        }
+    }
+    
+    return false;
 }
 
 // get map parameter functions
@@ -1450,8 +1521,8 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     switch (status) {
                                         case VoxelProjectionStatus::MATCHED:
                                             // 体素匹配，增加概率
-                                            updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_hit_log_);
-                                            break;
+                                            // updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_hit_log_);
+                                            // break;
                                         case VoxelProjectionStatus::OCCLUDED:
                                         case VoxelProjectionStatus::BEHIND_CAMERA:
                                         case VoxelProjectionStatus::OUT_OF_IMAGE:
@@ -1498,10 +1569,10 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                         float &value = voxel->subvoxel_values_[subvox_idx];
                                         switch (status) {
                                             case VoxelProjectionStatus::MATCHED:
-                                                // 子体素匹配，增加概率
-                                                new_value = value + prob_hit_log_;
-                                                value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
-                                                break;
+                                                // // 子体素匹配，增加概率
+                                                // new_value = value + prob_hit_log_;
+                                                // value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
+                                                // break;
                                             case VoxelProjectionStatus::OCCLUDED:
                                             case VoxelProjectionStatus::BEHIND_CAMERA:
                                             case VoxelProjectionStatus::OUT_OF_IMAGE:
@@ -1935,11 +2006,6 @@ void SOGMMap::blockIdxToWorld(const Eigen::Vector3i& block_idx, Eigen::Vector3d&
         pos[i] = (block_idx[i] + 0.5) * block_res_;
     }
 }
-void SOGMMap::blockIdxToWorldWithoutHalf(const Eigen::Vector3i& block_idx, Eigen::Vector3d& pos) const{
-    for (int i = 0; i < 3; i++) {
-        pos[i] = (block_idx[i]) * block_res_;
-    }
-}
 void SOGMMap::subVoxelIdxToLocalLinear(const Eigen::Vector3i& subvoxel_idx, int& local_linear_idx) const{
     local_linear_idx = (subvoxel_idx.x() & local_subvoxel_mask_) + 
                        ((subvoxel_idx.y() & local_subvoxel_mask_) << voxel_depth_) + 
@@ -1963,6 +2029,7 @@ void SOGMMap::blockIdxToLocalLinear(const Eigen::Vector3i& block_idx, int& local
     
     // 转换为线性索引
     local_linear_idx = block_offset[0]  + block_offset[1] * block_num_x_ + block_offset[2] * block_num_xy_;
+    // local_linear_idx = block_offset[2] + block_offset[1] * block_num_z_ + block_offset[0] * block_num_yz_;
 }
 
 // 局部线性索引转子体素索引
@@ -2011,9 +2078,15 @@ Eigen::Vector3i SOGMMap::linearToBlockIdx(int linear_idx) const {
     map_idx[2] = linear_idx / block_num_xy_;
     linear_idx -= map_idx[2] * block_num_xy_;
     map_idx[1] = linear_idx / block_num_x_;
-    linear_idx -= map_idx[1] * block_num_x_;
-    map_idx[0] = linear_idx;
+    map_idx[0] = linear_idx % block_num_x_;
+    // linear_idx -= map_idx[1] * block_num_x_;
+    // map_idx[0] = linear_idx;
 
+    // map_idx[0] = linear_idx / block_num_yz_;  // 计算 x 分量
+    // linear_idx -= map_idx[0] * block_num_yz_;  // 更新线性索引
+    // map_idx[1] = linear_idx / block_num_z_;  // 计算 y 分量
+    // map_idx[2] = linear_idx % block_num_z_;  // 计算 z 分量
+    
     // 计算全局块索引
     Eigen::Vector3i block_idx;
     for (int i = 0; i < 3; i++) {
@@ -2135,4 +2208,185 @@ void SOGMMap::getLocalMapState(std::vector<multilayer::VoxelGridMsg>& occupied_c
             }
         }
     }
+}
+
+// 添加到 SOGMMap 类的公有方法中
+bool SOGMMap::saveSemanticKittiVoxels(const std::string& base_directory, 
+                                      const Eigen::Vector3d& sensor_pos,
+                                      double voxel_size,
+                                      int grid_x, int grid_y, int grid_z) {
+    // 确保目录存在
+    if (!createDirectoryIfNotExists(base_directory)) {
+        return false;
+    }
+    
+    // 生成序列文件名
+    std::ostringstream filename_stream;
+    filename_stream << base_directory;
+    if (base_directory.back() != '/') {
+        filename_stream << '/';
+    }
+    filename_stream << std::setfill('0') << std::setw(6) << file_sequence_number << ".bin";
+    std::string filename = filename_stream.str();
+    
+    // 增加序列号
+    file_sequence_number++;
+
+    size_t total_voxels = grid_x * grid_y * grid_z;
+    std::vector<bool> occupied_grid;
+    occupied_grid.reserve(total_voxels);
+    
+    // 计算网格的起始位置（以传感器为中心）
+    Eigen::Vector3d grid_origin;
+    grid_origin.x() = sensor_pos.x() - (grid_x * voxel_size) / 2.0;
+    grid_origin.y() = sensor_pos.y() - (grid_y * voxel_size) / 2.0;
+    grid_origin.z() = sensor_pos.z() - (grid_z * voxel_size) / 2.0;
+    
+    std::cout << "[SemanticKITTI] Saving voxel grid centered at sensor position: " 
+              << sensor_pos.transpose() << std::endl;
+    std::cout << "[SemanticKITTI] Grid origin: " << grid_origin.transpose() << std::endl;
+    std::cout << "[SemanticKITTI] Grid size: " << grid_x << "x" << grid_y << "x" << grid_z 
+              << ", voxel size: " << voxel_size << "m" << std::endl;
+    
+    int filled_voxels = 0;
+    
+    // 遍历网格中的每个体素
+    for (int x = 0; x < grid_x; ++x) {
+        for (int y = 0; y < grid_y; ++y) {
+            for (int z = 0; z < grid_z; ++z) {
+                // 计算当前体素的世界坐标
+                Eigen::Vector3d voxel_world_pos;
+                voxel_world_pos.x() = grid_origin.x() + (x + 0.5) * voxel_size;
+                voxel_world_pos.y() = grid_origin.y() + (y + 0.5) * voxel_size;
+                voxel_world_pos.z() = grid_origin.z() + (z + 0.5) * voxel_size;
+                
+                // 检查该位置是否被占据
+                bool is_occupied = isOccupiedPrecise(voxel_world_pos);
+                
+                // 添加到布尔网格
+                occupied_grid.push_back(is_occupied);
+                
+                if (is_occupied) {
+                    filled_voxels++;
+                }
+            }
+        }
+    }
+    
+    std::cout << "[SemanticKITTI] Filled " << filled_voxels << " out of " 
+              << (grid_x * grid_y * grid_z) << " voxels" << std::endl;
+    
+    // 打包成二进制位
+    std::vector<unsigned char> binary_data;
+    binary_data.reserve(occupied_grid.size() / 8 + 1);
+    unsigned char current_byte = 0;
+    
+    for (size_t i = 0; i < occupied_grid.size(); ++i) {
+        if (occupied_grid[i]) {
+            current_byte |= (1 << (i % 8));
+        }
+        if ((i + 1) % 8 == 0 || i == occupied_grid.size() - 1) {
+            binary_data.push_back(current_byte);
+            current_byte = 0;
+        }
+    }
+    
+    // 写入二进制文件
+    std::cout << "[SemanticKITTI] Writing to file: " << filename << std::endl;
+    std::ofstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "[SemanticKITTI] ERROR: Cannot open file " << filename << std::endl;
+        return false;
+    }
+    
+    // 写入二进制位数据
+    file.write(reinterpret_cast<const char*>(binary_data.data()), binary_data.size());
+    
+    if (!file.good()) {
+        std::cerr << "[SemanticKITTI] ERROR: Failed to write voxel data to " << filename << std::endl;
+        file.close();
+        return false;
+    }
+    
+    file.close();
+    
+    std::cout << "[SemanticKITTI] Successfully saved voxel grid to " << filename << std::endl;
+    
+    return true;
+}
+
+
+// 重载版本：使用默认参数
+bool SOGMMap::saveSemanticKittiVoxels(const std::string& base_directory, 
+                                      const Eigen::Vector3d& sensor_pos) {
+    // 使用默认的 SemanticKITTI 参数
+    double voxel_size = 0.2;  // 20cm 体素
+    return saveSemanticKittiVoxels(base_directory, sensor_pos, voxel_size, 256, 256, 32);
+}
+
+// 修改创建目录的辅助函数，支持递归创建目录
+bool SOGMMap::createDirectoryIfNotExists(const std::string& path) {
+    // 检查路径是否为空
+    if (path.empty()) {
+        std::cerr << "[SemanticKITTI] ERROR: Empty path provided" << std::endl;
+        return false;
+    }
+    
+    struct stat info;
+    
+    // 如果目录已存在
+    if (stat(path.c_str(), &info) == 0) {
+        if (info.st_mode & S_IFDIR) {
+            // 目录存在且是目录
+            return true;
+        } else {
+            // 路径存在但不是目录
+            std::cerr << "[SemanticKITTI] ERROR: " << path << " exists but is not a directory" << std::endl;
+            return false;
+        }
+    }
+    
+    // 目录不存在，需要创建
+    // 先尝试创建父目录
+    size_t pos = path.find_last_of('/');
+    if (pos != std::string::npos && pos > 0) {
+        std::string parent_path = path.substr(0, pos);
+        if (!createDirectoryIfNotExists(parent_path)) {
+            return false;
+        }
+    }
+    
+    // 创建当前目录
+    if (mkdir(path.c_str(), 0755) != 0) {
+        int error = errno;
+        std::cerr << "[SemanticKITTI] ERROR: Cannot create directory " << path 
+                  << " - " << strerror(error) << " (errno: " << error << ")" << std::endl;
+        
+        // 提供一些常见错误的解决建议
+        switch (error) {
+            case EACCES:
+                std::cerr << "[SemanticKITTI] HINT: Permission denied. Try running with sudo or check directory permissions." << std::endl;
+                break;
+            case ENOENT:
+                std::cerr << "[SemanticKITTI] HINT: Parent directory does not exist." << std::endl;
+                break;
+            case EEXIST:
+                // 如果目录已存在，这实际上是成功的
+                if (stat(path.c_str(), &info) == 0 && (info.st_mode & S_IFDIR)) {
+                    std::cout << "[SemanticKITTI] Directory already exists: " << path << std::endl;
+                    return true;
+                }
+                break;
+            case ENOSPC:
+                std::cerr << "[SemanticKITTI] HINT: No space left on device." << std::endl;
+                break;
+            default:
+                std::cerr << "[SemanticKITTI] HINT: Unknown error occurred." << std::endl;
+                break;
+        }
+        return false;
+    }
+    
+    std::cout << "[SemanticKITTI] Successfully created directory: " << path << std::endl;
+    return true;
 }

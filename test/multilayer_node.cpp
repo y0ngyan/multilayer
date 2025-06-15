@@ -23,6 +23,8 @@
 #include <multilayer/VoxelGridMsgArray.h>
 
 #include <mutex>
+#include <std_msgs/Bool.h>  // 添加这个头文件
+#include <ctime>            // 添加这个头文件用于时间戳
 
 // 相机的内参、位姿信息、深度图像和点云数据
 struct cameraData
@@ -70,8 +72,6 @@ std::shared_ptr<message_filters::Subscriber<nav_msgs::Odometry>> odom_sub_;
 // for visualization
 // 发布滑动窗口大小
 ros::Publisher slide_global_map_range_pub_, local_update_range_pub_; // the sliding window size
-// 发布滑动窗口占用体素
-ros::Publisher slide_global_occ_pub_;                                // the sliding window size
 
 // 多分辨率占据和空闲区域
 // ros::Publisher multi_res_occ_pub_, multi_res_free_pub_;
@@ -80,6 +80,12 @@ ros::Publisher local_map_state_pub_;
 
 bool depth_need_update_;
 Eigen::Vector3d local_map_boundary_min_, local_map_boundary_max_;
+
+// 地图保存
+ros::Timer map_save_timer_;
+bool enable_auto_save_ = false;
+double save_interval_ = 60.0;  // 默认60秒保存一次
+std::string save_directory_ = "./";
 
 // visualization
 // 局部更新范围的可视化标记
@@ -167,84 +173,6 @@ void publishSlideGlobalGridMapRange()
 
     // 发布滑动窗口范围的可视化标记
     slide_global_map_range_pub_.publish(mk);
-}
-
-// void publishMultiResolutionOccupancy() {
-//     multilayer::VoxelGridMsgArray occ_msg;
-//     occ_msg.header.frame_id = frame_id_;
-//     occ_msg.header.stamp = ros::Time::now();
-    
-//     // 获取多层级占据体素
-//     const auto& occupied_voxels = map_.getNewOccupiedLayerVoxels();
-    
-//     // 填充消息
-//     std::vector<multilayer::VoxelGridMsg> occ_msg_array;
-//     map_.fillVoxelGridMsg(occ_msg_array, occupied_voxels);
-//     occ_msg.voxels = occ_msg_array;
-    
-//     // 发布消息
-//     multi_res_occ_pub_.publish(occ_msg);
-// }
-
-// void publishMultiResolutionFree() {
-//     multilayer::VoxelGridMsgArray free_msg;
-//     free_msg.header.frame_id = frame_id_;
-//     free_msg.header.stamp = ros::Time::now();
-    
-//     // 获取多层级空闲体素
-//     const auto& freed_voxels = map_.getNewFreedLayerVoxels();
-    
-//     // 填充消息
-//     std::vector<multilayer::VoxelGridMsg> free_msg_array;
-//     map_.fillVoxelGridMsg(free_msg_array, freed_voxels);
-//     free_msg.voxels = free_msg_array;
-    
-//     // 发布消息
-//     multi_res_free_pub_.publish(free_msg);
-// }
-
-// 发布全局占据地图的点云数据
-void publishSlideGlobalOccMap()
-{
-    pcl::PointXYZ pt;
-    pcl::PointCloud<pcl::PointXYZ> cloud;
-
-    Eigen::Vector3d pos;
-    int index;
-
-    // 原点和滑动窗口距离原点最远的对角点
-    Eigen::Vector3i min_cut, max_cut;
-    min_cut = map_.getOrigin();
-    max_cut = map_.getOrigin() + map_.getNum3dim();
-
-    // 遍历整个滑动窗口范围内的体素
-    // 将每个体素的体素坐标转换为索引，然后检查该体素是否被占据
-    // 如果该体素被占据，则将索引转换为世界坐标，添加到点云数据中
-    for (int x = min_cut(0); x <= max_cut(0); ++x)
-        for (int y = min_cut(1); y <= max_cut(1); ++y)
-            for (int z = min_cut(2); z <= max_cut(2); ++z)
-            {
-                map_.blockIdxToLocalLinear(Eigen::Vector3i(x, y, z), index);
-                if (!map_.isOccupied(index))
-                    continue;
-
-                Eigen::Vector3i blockIdx = map_.linearToBlockIdx(index);
-                map_.blockIdxToWorld(blockIdx, pos);
-
-                pt.x = pos(0);
-                pt.y = pos(1);
-                pt.z = pos(2);
-                cloud.points.push_back(pt);
-            }
-
-    cloud.width = cloud.points.size();
-    cloud.height = 1;
-    cloud.is_dense = true;
-    cloud.header.frame_id = frame_id_;
-
-    sensor_msgs::PointCloud2 cloud_msg;
-    pcl::toROSMsg(cloud, cloud_msg);
-    slide_global_occ_pub_.publish(cloud_msg);
 }
 
 /**
@@ -350,27 +278,6 @@ void depthOdomCallback(const sensor_msgs::ImageConstPtr &img, const nav_msgs::Od
                 // 将对应的三维点添加到未命中点云中
                 camData_.ptws_miss.points.push_back(pt);
             }
-            // if (*row_ptr == 0)
-            // {
-            //     // 如果深度值为0，则跳过该点
-            //     continue;
-            // }
-            // else if (depth > camData_.depth_maxdist)
-            // {
-            //     // // 如果深度值超过最大深度值，则将深度值设置为最大深度距离
-            //     // depth = camData_.depth_maxdist;
-
-            //     // pt_w(0) = (u - camData_.cx) * depth / camData_.fx;
-            //     // pt_w(1) = (v - camData_.cy) * depth / camData_.fy;
-            //     // pt_w(2) = depth;
-            //     // pt_w = camData_.R_C_2_W * pt_w + camData_.T_C_2_W;
-            //     // pt.x = pt_w(0);
-            //     // pt.y = pt_w(1);
-            //     // pt.z = pt_w(2);
-            //     // // 将对应的三维点添加到未命中点云中
-            //     // camData_.ptws_miss.points.push_back(pt);
-            //     continue;
-            // }
             else if (depth < camData_.depth_mindist)
             {
                 continue;
@@ -484,6 +391,37 @@ void visualizeMapCallback(const ros::TimerEvent &)
     // ROS_INFO_STREAM("Visualize map done, time: " << (t2 - t1).toSec());
 }
 
+void saveSemanticKittiMap() {
+    std::cout << "[SemanticKITTI] Auto-saving map at sensor position: " 
+              << camData_.camera_pos.transpose() << std::endl;
+    
+    {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        bool success = map_.saveSemanticKittiVoxels(save_directory_, camData_.camera_pos);
+        
+        if (success) {
+            std::cout << "[SemanticKITTI] Successfully auto-saved map to " << save_directory_ << std::endl;            
+        } else {
+            std::cerr << "[SemanticKITTI] Failed to auto-save map!" << std::endl;
+        }
+    }
+}
+
+// 定时器回调函数
+void mapSaveTimerCallback(const ros::TimerEvent &) {
+    if (!enable_auto_save_) {
+        return;
+    }
+    
+    // 检查地图是否有效（传感器位置不为零）
+    if (camData_.camera_pos.norm() < 1e-6) {
+        ROS_WARN("[SemanticKITTI] Skipping save: sensor position not initialized");
+        return;
+    }
+    
+    saveSemanticKittiMap();
+}
+
 /**
  * @brief 从 YAML 文件中设置相机参数。
  *
@@ -533,6 +471,20 @@ void setCameraParam(std::string filename)
 
     cv::cv2eigen(rc2b, camData_.R_C_2_B);
     cv::cv2eigen(tc2b, camData_.T_C_2_B);
+
+    cv::FileNode mapsave_node = fs["SemanticKITTI"];
+    int save_map = (int)(mapsave_node["enable_auto_save"]);
+    enable_auto_save_ = (bool)(save_map);
+    save_interval_ = (double)(mapsave_node["save_interval"]);
+    save_directory_ = (std::string)(mapsave_node["save_directory"]);
+    // 确保保存目录以 '/' 结尾
+    if (!save_directory_.empty() && save_directory_.back() != '/') {
+        save_directory_ += '/';
+    }
+
+    std::cout << "[CameraParam INIT] save map enable: " << (enable_auto_save_ ? "true" : "false") << std::endl;
+    std::cout << "[CameraParam INIT] save interval: " << save_interval_ << " seconds" << std::endl;
+    std::cout << "[CameraParam INIT] save directory: " << save_directory_ << std::endl;
 
     std::cout << "[CameraParam INIT] use depth camera" << std::endl;
     std::cout << "[CameraParam INIT] depth heigth: " << camData_.depth_heigth << std::endl;
@@ -584,11 +536,25 @@ int main(int argc, char **argv)
     std::cout << "parameter file: " << filename << std::endl;
 
     map_.init(filename);
-
     setCameraParam(filename);
+    map_.setCameraParameters(
+        camData_.fx, camData_.fy, camData_.cx, camData_.cy,
+        camData_.depth_width, camData_.depth_heigth,
+        camData_.k_depth_scaling_factor,
+        camData_.depth_maxdist,
+        camData_.depth_mindist,
+        camData_.skip_pixel,
+        camData_.R_C_2_B, camData_.T_C_2_B
+    );
 
     map_update_timer_ = node.createTimer(ros::Duration(0.05), updateMapCallback);
     map_vis_timer_ = node.createTimer(ros::Duration(1.0), visualizeMapCallback);
+
+    // 新增：地图保存定时器（只有启用自动保存时才创建）
+    if (enable_auto_save_ && save_interval_ > 0) {
+        map_save_timer_ = node.createTimer(ros::Duration(save_interval_), mapSaveTimerCallback);
+        ROS_INFO("[SemanticKITTI] Auto-save timer created with interval: %.1f seconds", save_interval_);
+    }
 
     depth_sub_.reset(new message_filters::Subscriber<sensor_msgs::Image>(node, "/depth", 1));
     odom_sub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(node, "/odom", 1));
@@ -598,15 +564,6 @@ int main(int argc, char **argv)
     // 发布局部更新范围、滑动窗口范围、新占据区域和新空闲区域的话题
     local_update_range_pub_ = node.advertise<visualization_msgs::Marker>("/map/range/local", 10);
     slide_global_map_range_pub_ = node.advertise<visualization_msgs::Marker>("/map/range/slide", 10);
-    // 多分辨率发布
-    // multi_res_occ_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/multi_res_occ", 10);
-    // multi_res_free_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/multi_res_free", 10);
-    // TODO！！这个话题没有获得对应的消息
-    // 运行程序后，在rviz中该信息并没有对应的可视化
-    // DONE！！！
-    slide_global_occ_pub_ = node.advertise<sensor_msgs::PointCloud2>("/map/sogm", 10);
-
-    // 初始化新的Publisher
     local_map_state_pub_ = node.advertise<multilayer::VoxelGridMsgArray>("/map/local_state", 10);
 
     depth_need_update_ = false;

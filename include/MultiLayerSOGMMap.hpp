@@ -20,6 +20,9 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include "RayCast.hpp"
 
+#include <fstream>
+#include <cstring>
+
 #include <multilayer/VoxelGridMsg.h>
 #include "ObjectPool.hpp"
 
@@ -49,6 +52,7 @@ enum class VoxelProjectionStatus {
     OCCLUDED,          // 被遮挡
     MATCHED,           // 匹配（在深度图中且深度一致）
     NOT_MATCHED        // 不匹配（在深度图中但深度不一致）
+
 };
 
 class Voxel;    // 前向声明Voxel类
@@ -134,6 +138,7 @@ public:
 };
 
 static const int NUM_BLOCK_MUTEXES = 32; // 块互斥锁数量
+static int file_sequence_number = 0; // 文件序列号，用于文件命名
 
 class SOGMMap
 {
@@ -184,6 +189,7 @@ private:
     int subvoxel_num_in_voxel_, subvoxel_num_in_voxel_square_, total_subvoxel_in_voxel_;
 
     int block_num_x_, block_num_xy_;
+    int block_num_z_, block_num_yz_;
 
     Eigen::Vector3d camera_pos_;
     double depth_maxdist_, depth_mindist_;
@@ -291,11 +297,24 @@ private:
                                                double valid_ratio,
                                                double depth_threshold);
     double getAdaptiveValidRatio(double distance, LayerType layer) const;
+    
+    // 辅助函数
+    bool createDirectoryIfNotExists(const std::string& path);
 public:
     SOGMMap();
     ~SOGMMap();
 
     void init(std::string filename);
+    
+    // 设置相机参数
+    void setCameraParameters(double fx, double fy, double cx, double cy, 
+                            int depth_width, int depth_height,
+                            double k_depth_scaling_factor = 1000.0,
+                            double depth_maxdist = 100.0,
+                            double depth_mindist = 0.1,
+                            int skip_pixel = 1,
+                            Eigen::Matrix3d R_C_2_B = Eigen::Matrix3d::Identity(),
+                            Eigen::Vector3d T_C_2_B = Eigen::Vector3d::Zero());
 
     void update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr,
         const cv::Mat &depth_image, const Eigen::Matrix3d &R_C_2_W,
@@ -303,12 +322,22 @@ public:
 
     // main interface
     std::vector<int> *getSlideClearIndex();
-    std::vector<int> *getNewOcc();
-    std::vector<int> *getNewFree();
     float getOccupancy(const Eigen::Vector3d pos);
     bool isOccupied(const int linear_idx);
     bool isOccupied(const Eigen::Vector3i block_idx);
     bool isOccupied(const Eigen::Vector3d pos);
+    bool isOccupiedPrecise(const Eigen::Vector3d& pos);
+
+    bool saveSemanticKittiVoxels(const std::string& base_directory, 
+                                      const Eigen::Vector3d& sensor_pos,
+                                      double voxel_size,
+                                      int grid_x, int grid_y, int grid_z);
+            
+    bool saveSemanticKittiVoxels(const std::string& base_directory, 
+                                      const Eigen::Vector3d& sensor_pos);
+    // 序列号管理
+    void resetFileSequenceNumber();
+    void setFileSequenceNumber(int sequence);
 
     // 新增：获取局部地图中所有被占据的、多分辨率栅格的状态
     void getLocalMapState(std::vector<multilayer::VoxelGridMsg>& occupied_cells) const;
@@ -343,7 +372,6 @@ public:
     void subVoxelIdxToWorld(const Eigen::Vector3i& subvoxel_idx, Eigen::Vector3d& pos) const;
     void voxelIdxToWorld(const Eigen::Vector3i& voxel_idx, Eigen::Vector3d& pos) const;
     void blockIdxToWorld(const Eigen::Vector3i& block_idx, Eigen::Vector3d& pos) const;
-    void blockIdxToWorldWithoutHalf(const Eigen::Vector3i& block_idx, Eigen::Vector3d& pos) const;
 
     // 线性索引转换
     void subVoxelIdxToLocalLinear(const Eigen::Vector3i& subvoxel_idx, int& local_linear_idx) const;
