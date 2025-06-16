@@ -49,6 +49,7 @@ enum class VoxelProjectionStatus {
     BEHIND_CAMERA,      // 在相机后方
     OUT_OF_IMAGE,       // 超出图像范围
     INSUFFICIENT_DATA,  // 深度数据不足
+    LESS_VALID_DATA,
     OCCLUDED,          // 被遮挡
     MATCHED,           // 匹配（在深度图中且深度一致）
     NOT_MATCHED        // 不匹配（在深度图中但深度不一致）
@@ -135,6 +136,18 @@ public:
             is_voxel_allocated_ = false;
         }
     }
+};
+
+// 用于存储投影计算结果的结构体
+struct VoxelProjectionResult {
+    int index;
+    VoxelProjectionStatus status;
+};
+
+struct SubVoxelProjectionResult {
+    int voxel_index;
+    int subvoxel_index;
+    VoxelProjectionStatus status;
 };
 
 static const int NUM_BLOCK_MUTEXES = 32; // 块互斥锁数量

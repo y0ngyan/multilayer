@@ -10,9 +10,9 @@ OccMap:
   near_distance_threshold: 35.0
   far_distance_threshold: 38.0
 
-  min_valid_ratio_sub: 0.01
-  min_valid_ratio_voxel: 0.25
-  min_valid_ratio_block: 0.3
+  min_valid_ratio_sub: 0.2
+  min_valid_ratio_voxel: 0.2
+  min_valid_ratio_block: 0.1
 
   min_valid_ratio_ratio: 0.1
 
