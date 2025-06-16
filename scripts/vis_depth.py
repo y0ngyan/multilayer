@@ -13,7 +13,7 @@ class DepthViewer:
         rospy.init_node('depth_viewer_interactive', anonymous=True)
 
         # --- Parameters ---
-        self.depth_image_topic = rospy.get_param('~depth_image_topic', '/d400/depth/image_rect_raw')
+        self.depth_image_topic = rospy.get_param('~depth_image_topic', '/generated_depth')
         # Max depth for visualization normalization.
         # For 32FC1 (float, usually meters): this value is in meters.
         # For 16UC1 (uint16, usually mm): this value is in mm (or meters if <100, then auto-multiplied by 1000).
@@ -49,17 +49,17 @@ class DepthViewer:
             return
 
         # --- 输出深度图类型信息 ---
-        rospy.loginfo("=== Depth Image Info ===")
-        rospy.loginfo("ROS encoding: %s", ros_image_msg.encoding)
-        rospy.loginfo("OpenCV dtype: %s", cv_image_raw.dtype)
-        rospy.loginfo("Image shape: %s", cv_image_raw.shape)
-        rospy.loginfo("Min value: %s", np.nanmin(cv_image_raw))
-        rospy.loginfo("Max value: %s", np.nanmax(cv_image_raw))
-        rospy.loginfo("Mean value: %s", np.nanmean(cv_image_raw))
-        if ros_image_msg.encoding == "32FC1":
-            nan_count = np.count_nonzero(np.isnan(cv_image_raw))
-            rospy.loginfo("NaN pixels count: %d", nan_count)
-        rospy.loginfo("========================")
+        # rospy.loginfo("=== Depth Image Info ===")
+        # rospy.loginfo("ROS encoding: %s", ros_image_msg.encoding)
+        # rospy.loginfo("OpenCV dtype: %s", cv_image_raw.dtype)
+        # rospy.loginfo("Image shape: %s", cv_image_raw.shape)
+        # rospy.loginfo("Min value: %s", np.nanmin(cv_image_raw))
+        # rospy.loginfo("Max value: %s", np.nanmax(cv_image_raw))
+        # rospy.loginfo("Mean value: %s", np.nanmean(cv_image_raw))
+        # if ros_image_msg.encoding == "32FC1":
+        #     nan_count = np.count_nonzero(np.isnan(cv_image_raw))
+        #     rospy.loginfo("NaN pixels count: %d", nan_count)
+        # rospy.loginfo("========================")
 
         with self.image_lock:
             self.cv_depth_image_raw = cv_image_raw.copy() # Store raw depth data

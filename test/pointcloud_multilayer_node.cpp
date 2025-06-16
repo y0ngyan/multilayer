@@ -23,29 +23,24 @@
 #include <multilayer/VoxelGridMsg.h>
 #include <multilayer/VoxelGridMsgArray.h>
 
-// 相机的内参、位姿信息、深度图像和点云数据
 struct cameraData
 {
-    /* depth image process */
-    double cx, cy, fx, fy;
-    int depth_width, depth_heigth;
+    /* Spherical Projection Parameters (replaces pinhole camera model) */
+    int polar_width, polar_height;
+    double fov_theta_min_rad, fov_theta_max_rad;
+    double fov_phi_min_rad, fov_phi_max_rad;
+    double sensor_res_hor_rad, sensor_res_vert_rad;
 
+    /* Common Parameters */
     double depth_maxdist, depth_mindist;
-    int depth_filter_margin;
     double k_depth_scaling_factor;
-    int skip_pixel;
 
-    Eigen::Vector3d camera_pos;
-    Eigen::Quaterniond camera_q;
+    /* Pose Information */
+    Eigen::Matrix3d R_WL;
+    Eigen::Vector3d T_WL;
+    Eigen::Quaterniond pointcloud_q;
 
-    Eigen::Matrix3d R_C_2_W, R_C_2_B;
-    Eigen::Vector3d T_C_2_B, T_C_2_W;
-
-    // 点云位姿变换（直接从里程计获取，用于点云变换）
-    Eigen::Matrix3d R_PC_2_W;  // 点云到世界坐标系的旋转矩阵
-    Eigen::Vector3d T_PC_2_W;  // 点云到世界坐标系的平移向量
-    Eigen::Quaterniond pointcloud_q;  // 点云的四元数
-
+    /* Data Buffers */
     cv::Mat depth_image;
     pcl::PointCloud<pcl::PointXYZ> ptws_hit, ptws_miss;
 };
@@ -85,6 +80,32 @@ ros::Publisher generated_depth_pub_;
 
 bool depth_need_update_;
 Eigen::Vector3d local_map_boundary_min_, local_map_boundary_max_;
+
+int Rad2Idx(double rad, bool is_horizontal) {
+    if (is_horizontal) { // 水平方向 (theta)
+        if (rad < camData_.fov_theta_min_rad || rad > camData_.fov_theta_max_rad) return -1;
+        return static_cast<int>((rad - camData_.fov_theta_min_rad) / camData_.sensor_res_hor_rad);
+    } else { // 垂直方向 (phi)
+        if (rad < camData_.fov_phi_min_rad || rad > camData_.fov_phi_max_rad) return -1;
+        return static_cast<int>((rad - camData_.fov_phi_min_rad) / camData_.sensor_res_vert_rad);
+    }
+}
+
+// 将传感器坐标系下的笛卡尔坐标转换为球面坐标和深度图索引
+void euc2polar(const Eigen::Vector3d& euc_pt, double& r, int& u, int& v) {
+    r = euc_pt.norm();
+    if (r < 1e-5) {
+        u = -1; v = -1;
+        return;
+    }
+    // D-Map 标准投影模型: X-前, Y-左, Z-上
+    double theta_rad = atan2(euc_pt.y(), euc_pt.x()); // 方位角
+    double phi_rad = atan2(euc_pt.z(), euc_pt.head<2>().norm()); // 俯仰角
+    
+    // 转换为像素索引 (u-col-width, v-row-height)
+    u = Rad2Idx(theta_rad, true);
+    v = Rad2Idx(phi_rad, false);
+}
 
 // visualization
 // 局部更新范围的可视化标记
@@ -224,59 +245,34 @@ void publishSlideGlobalOccMap()
  * @param T_C_2_W 相机到世界坐标系的平移向量
  * @return 生成的深度图
  */
-cv::Mat convertPointCloudToDepthImage(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud_pcl,
-                                      const Eigen::Matrix3d& R_C_2_W,
-                                      const Eigen::Vector3d& T_C_2_W)
+cv::Mat convertPointCloudToDepthImage(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud_pcl)
 {
-    // 初始化深度图
-    cv::Mat depth_image = cv::Mat::zeros(camData_.depth_heigth, camData_.depth_width, CV_32FC1);
+    // 初始化深度图 (使用浮点数以存储精确距离，最后再转换)
+    cv::Mat depth_image = cv::Mat::zeros(camData_.polar_height, camData_.polar_width, CV_32FC1);
     
     // 处理点云中的每个点
     for (const auto& point : cloud_pcl->points)
     {
-        // 检查点是否有效（非NaN）
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
-            continue;
+        double r; // 距离
+        int u, v; // 像素坐标 (u-col-width, v-row-height)
+
+        Eigen::Vector3d pt_sensor_frame(point.x, point.y, point.z);
         
-        // 将点从激光雷达坐标系转换到相机坐标系
-        Eigen::Vector3d pt_camera(-point.y, -point.z, point.x);
+        // 执行球面投影
+        euc2polar(pt_sensor_frame, r, u, v);
         
-        // 过滤相机后方的点
-        if (pt_camera.z() <= 0)
-            continue;
+        // 检查距离和投影坐标是否有效
+        if (r < camData_.depth_mindist || r > camData_.depth_maxdist) continue;
+        if (u < 0 || u >= camData_.polar_width || v < 0 || v >= camData_.polar_height) continue;
         
-        // 计算距离并过滤超出范围的点
-        double distance = pt_camera.norm();
-        if (distance < camData_.depth_mindist || distance > camData_.depth_maxdist)
-            continue;
-        
-        // 使用针孔相机模型投影到像素坐标
-        double u = camData_.fx * (pt_camera.x() / pt_camera.z()) + camData_.cx;
-        double v = camData_.fy * (pt_camera.y() / pt_camera.z()) + camData_.cy;
-        
-        // 转换为整数像素坐标
-        int u_int = static_cast<int>(std::round(u));
-        int v_int = static_cast<int>(std::round(v));
-        
-        // 检查是否在图像范围内
-        if (u_int >= 0 && u_int < camData_.depth_width && v_int >= 0 && v_int < camData_.depth_heigth)
-        {
-            // 获取当前像素的深度值
-            float& current_depth = depth_image.at<float>(v_int, u_int);
-            
-            // 如果当前像素没有深度值，或者新的深度值更近，则更新
-            if (current_depth == 0.0f || pt_camera.z() < current_depth)
-            {
-                current_depth = static_cast<float>(pt_camera.z());
-            }
+        // Z-buffering: 只保留最近的点
+        float& current_depth = depth_image.at<float>(v, u);
+        if (current_depth == 0.0f || r < current_depth) {
+            current_depth = static_cast<float>(r);
         }
     }
     
-    // 转换为16位无符号整型（与原始深度图格式匹配）
-    cv::Mat depth_image_16u;
-    depth_image.convertTo(depth_image_16u, CV_16UC1, camData_.k_depth_scaling_factor);
-    
-    return depth_image_16u;
+    return depth_image;
 }
 
 /**
@@ -287,30 +283,18 @@ cv::Mat convertPointCloudToDepthImage(const pcl::PointCloud<pcl::PointXYZ>::Ptr&
 void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg, 
                            const nav_msgs::OdometryConstPtr &odom)
 {
-    // 从里程计数据中提取相机的位置和姿态
-    camData_.camera_pos(0) = odom->pose.pose.position.x;
-    camData_.camera_pos(1) = odom->pose.pose.position.y;
-    camData_.camera_pos(2) = odom->pose.pose.position.z;
-
-    // 相机位姿变换（保持原有逻辑，用于深度图处理）
-    camData_.camera_q = Eigen::Quaterniond(odom->pose.pose.orientation.w, odom->pose.pose.orientation.x,
-                                           odom->pose.pose.orientation.y, odom->pose.pose.orientation.z);
-    // 相机变换依然乘以R_C_2_B
-    camData_.R_C_2_W = camData_.camera_q.toRotationMatrix() * camData_.R_C_2_B;
-    camData_.T_C_2_W = camData_.camera_pos + camData_.camera_q.toRotationMatrix() * camData_.T_C_2_B;
-
-    // 点云位姿变换（直接使用里程计数据，不乘R_C_2_B）
+    // 点云位姿变换
     camData_.pointcloud_q = Eigen::Quaterniond(odom->pose.pose.orientation.w, odom->pose.pose.orientation.x,
                                               odom->pose.pose.orientation.y, odom->pose.pose.orientation.z);
-    camData_.R_PC_2_W = camData_.pointcloud_q.toRotationMatrix();
-    camData_.T_PC_2_W = camData_.camera_pos;
+    camData_.R_WL = camData_.pointcloud_q.toRotationMatrix();
+    camData_.T_WL = Eigen::Vector3d(odom->pose.pose.position.x, odom->pose.pose.position.y, odom->pose.pose.position.z);
 
     // 发布相机的位姿信息（使用相机变换）
     static tf::TransformBroadcaster br;
-    Eigen::Quaterniond eq(camData_.R_C_2_W);
     br.sendTransform(tf::StampedTransform(tf::Transform(
-                                              tf::Quaternion(eq.w(), eq.x(), eq.y(), eq.z()),
-                                              tf::Vector3(camData_.T_C_2_W(0), camData_.T_C_2_W(1), camData_.T_C_2_W(2))),
+                                              tf::Quaternion(camData_.pointcloud_q.x(), camData_.pointcloud_q.y(),
+                                                             camData_.pointcloud_q.z(), camData_.pointcloud_q.w()),
+                                              tf::Vector3(camData_.T_WL(0), camData_.T_WL(1), camData_.T_WL(2))),
                                           odom->header.stamp, frame_id_, child_frame_id_));
 
     // 清空之前的点云数据
@@ -322,20 +306,17 @@ void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg,
     pcl::fromROSMsg(*cloud_msg, *cloud_pcl);
 
     // 从点云生成深度图
-    camData_.depth_image = convertPointCloudToDepthImage(cloud_pcl, camData_.R_C_2_W, camData_.T_C_2_W);
+    camData_.depth_image = convertPointCloudToDepthImage(cloud_pcl);
 
     // 发布生成的深度图（用于调试）
     if (generated_depth_pub_.getNumSubscribers() > 0)
     {
-        cv::Mat depth_image_32f;
-        camData_.depth_image.convertTo(depth_image_32f, CV_32FC1, 1.0 / camData_.k_depth_scaling_factor);
-        
         sensor_msgs::Image depth_msg;
         cv_bridge::CvImage cv_bridge_image;
         cv_bridge_image.header.stamp = odom->header.stamp;
         cv_bridge_image.header.frame_id = frame_id_;
         cv_bridge_image.encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-        cv_bridge_image.image = depth_image_32f;
+        cv_bridge_image.image = camData_.depth_image;
         cv_bridge_image.toImageMsg(depth_msg);
         generated_depth_pub_.publish(depth_msg);
     }
@@ -343,8 +324,8 @@ void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg,
     // 初始化局部地图边界
     if (true)
     {
-        local_map_boundary_max_ = camData_.camera_pos;
-        local_map_boundary_min_ = camData_.camera_pos;
+        local_map_boundary_max_ = camData_.T_WL;
+        local_map_boundary_min_ = camData_.T_WL;
     }
 
     // 处理点云数据，使用点云专用的变换
@@ -354,33 +335,33 @@ void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg,
         if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
             continue;
 
-        // 计算点到相机的距离
-        Eigen::Vector3d pt_c(point.x, point.y, point.z);
-        double distance = pt_c.norm();
+        Eigen::Vector3d pt_sensor_frame(point.x, point.y, point.z);
+        double distance = pt_sensor_frame.norm();
 
         // 只处理距离在有效范围内的点
         if (distance >= camData_.depth_mindist && distance <= camData_.depth_maxdist)
         {
             // 使用点云专用变换到世界坐标系
-            Eigen::Vector3d pt_w = camData_.R_PC_2_W * pt_c + camData_.T_PC_2_W;
+            Eigen::Vector3d pt_w = camData_.R_WL * pt_sensor_frame + camData_.T_WL;
 
-            pcl::PointXYZ hit_pt;
-            hit_pt.x = pt_w(0);
-            hit_pt.y = pt_w(1);
-            hit_pt.z = pt_w(2);
-            camData_.ptws_hit.points.push_back(hit_pt);
+            camData_.ptws_hit.points.emplace_back(pt_w(0), pt_w(1), pt_w(2));
 
             // 更新局部地图边界
             if (true)
             {
-                local_map_boundary_max_(0) = std::max(local_map_boundary_max_(0), pt_w(0));
-                local_map_boundary_max_(1) = std::max(local_map_boundary_max_(1), pt_w(1));
-                local_map_boundary_max_(2) = std::max(local_map_boundary_max_(2), pt_w(2));
-
-                local_map_boundary_min_(0) = std::min(local_map_boundary_min_(0), pt_w(0));
-                local_map_boundary_min_(1) = std::min(local_map_boundary_min_(1), pt_w(1));
-                local_map_boundary_min_(2) = std::min(local_map_boundary_min_(2), pt_w(2));
+                local_map_boundary_max_.x() = std::max(local_map_boundary_max_.x(), pt_w.x());
+                local_map_boundary_max_.y() = std::max(local_map_boundary_max_.y(), pt_w.y());
+                local_map_boundary_max_.z() = std::max(local_map_boundary_max_.z(), pt_w.z());
+                local_map_boundary_min_.x() = std::min(local_map_boundary_min_.x(), pt_w.x());
+                local_map_boundary_min_.y() = std::min(local_map_boundary_min_.y(), pt_w.y());
+                local_map_boundary_min_.z() = std::min(local_map_boundary_min_.z(), pt_w.z());
             }
+        }
+        else if (distance > camData_.depth_maxdist)
+        {
+            // 如果点在最大距离之外，添加到未命中的点云
+            Eigen::Vector3d pt_w = camData_.R_WL * pt_sensor_frame + camData_.T_WL;
+            camData_.ptws_miss.points.emplace_back(pt_w(0), pt_w(1), pt_w(2));
         }
     }
 
@@ -405,15 +386,15 @@ void updateMapCallback(const ros::TimerEvent &)
     {
         // 在访问共享的 map_ 对象前加锁
         std::lock_guard<std::mutex> lock(map_mutex_);
-        map_.update(&camData_.ptws_hit, &camData_.ptws_miss, camData_.depth_image, camData_.R_C_2_W, camData_.T_C_2_W, camData_.camera_pos);
+        map_.update(&camData_.ptws_hit, &camData_.ptws_miss, camData_.depth_image, camData_.R_WL, camData_.T_WL);
     }
 
     t2 = ros::Time::now();
     
     // 更新 local_map_boundary_min_ 和 local_map_boundary_max_
     // 将它们设置为相机位置
-    local_map_boundary_min_ = camData_.camera_pos;
-    local_map_boundary_max_ = camData_.camera_pos;
+    local_map_boundary_min_ = camData_.T_WL;
+    local_map_boundary_max_ = camData_.T_WL;
 
     publishLocalUpdateRange(); // 发布局部更新范围
     publishSlideGlobalGridMapRange(); // 发布全局网格地图范围
@@ -488,77 +469,45 @@ void visualizeMapCallback(const ros::TimerEvent &)
 void setCameraParam(std::string filename)
 {
     cv::FileStorage fs(filename, cv::FileStorage::READ);
-    if (!fs.isOpened())
-    {
+    if (!fs.isOpened()) {
         std::cerr << "**ERROR CAN NOT OPEN YAML FILE**" << std::endl;
+        return;
     }
 
     cv::FileNode yaml_node = fs["LiDAR"];
     
-    // 读取激光雷达参数
     cv::FileNode fov_theta_node = yaml_node["fov_theta_range"];
     cv::FileNode fov_phi_node = yaml_node["fov_phi_range"];
     
-    double fov_theta_min = (double)fov_theta_node[0];
-    double fov_theta_max = (double)fov_theta_node[1];
-    double fov_phi_min = (double)fov_phi_node[0];
-    double fov_phi_max = (double)fov_phi_node[1];
+    double fov_theta_min_deg = (double)fov_theta_node[0];
+    double fov_theta_max_deg = (double)fov_theta_node[1];
+    double fov_phi_min_deg = (double)fov_phi_node[0];
+    double fov_phi_max_deg = (double)fov_phi_node[1];
     
-    double fov_depth = (double)yaml_node["fov_depth"];
-    double sensor_res_hor = (double)yaml_node["sensor_res_hor"];
-    double sensor_res_vert = (double)yaml_node["sensor_res_vert"];
+    // 转换为弧度
+    camData_.fov_theta_min_rad = fov_theta_min_deg * M_PI / 180.0;
+    camData_.fov_theta_max_rad = fov_theta_max_deg * M_PI / 180.0;
+    camData_.fov_phi_min_rad = fov_phi_min_deg * M_PI / 180.0;
+    camData_.fov_phi_max_rad = fov_phi_max_deg * M_PI / 180.0;
     
-    // 计算深度图尺寸（参考point2depth.py的计算方法）
-    camData_.depth_width = static_cast<int>((fov_theta_max - fov_theta_min) / sensor_res_hor) + 1;
-    camData_.depth_heigth = static_cast<int>((fov_phi_max - fov_phi_min) / sensor_res_vert) + 1;
-    
-    // 计算相机内参（参考point2depth.py的计算方法）
-    // 将视场角转换为弧度
-    double fov_h_rad = (fov_theta_max - fov_theta_min) * M_PI / 180.0;
-    double fov_v_rad = (fov_phi_max - fov_phi_min) * M_PI / 180.0;
-    
-    // 使用针孔相机模型计算焦距
-    camData_.fx = camData_.depth_width / (2.0 * tan(fov_h_rad / 2.0));
-    camData_.fy = camData_.depth_heigth / (2.0 * tan(fov_v_rad / 2.0));
-    
-    // 主点设置为图像中心
-    camData_.cx = (camData_.depth_width - 1) / 2.0;
-    camData_.cy = (camData_.depth_heigth - 1) / 2.0;
+    double sensor_res_hor_deg = (double)yaml_node["sensor_res_hor"];
+    double sensor_res_vert_deg = (double)yaml_node["sensor_res_vert"];
+    camData_.sensor_res_hor_rad = sensor_res_hor_deg * M_PI / 180.0;
+    camData_.sensor_res_vert_rad = sensor_res_vert_deg * M_PI / 180.0;
 
-    // 读取其他参数
+    // 计算深度图尺寸
+    camData_.polar_width = static_cast<int>(std::ceil((camData_.fov_theta_max_rad - camData_.fov_theta_min_rad) / camData_.sensor_res_hor_rad));
+    camData_.polar_height = static_cast<int>(std::ceil((camData_.fov_phi_max_rad - camData_.fov_phi_min_rad) / camData_.sensor_res_vert_rad));
+
+    // 读取其他通用参数
     camData_.k_depth_scaling_factor = (double)(yaml_node["k_depth_scaling_factor"]);
-    camData_.depth_maxdist = fov_depth;  // 使用激光雷达的最大探测距离
+    camData_.depth_maxdist = (double)yaml_node["fov_depth"];
     camData_.depth_mindist = (double)(yaml_node["depth_mindist"]);
-    camData_.depth_filter_margin = (double)(yaml_node["depth_filter_margin"]);
-    camData_.skip_pixel = (double)(yaml_node["skip_pixel"]);
 
-    std::cout << "[LiDAR INIT] 从 YAML 文件中读取激光雷达参数" << std::endl;
-
-    cv::Mat rc2b, tc2b;
-    yaml_node["R_C_2_B"] >> rc2b;
-    yaml_node["T_C_2_B"] >> tc2b;
-
-    cv::cv2eigen(rc2b, camData_.R_C_2_B);
-    cv::cv2eigen(tc2b, camData_.T_C_2_B);
-
-    std::cout << "[LiDAR INIT] 激光雷达参数初始化" << std::endl;
-    std::cout << "[LiDAR INIT] 水平视场角范围: [" << fov_theta_min << ", " << fov_theta_max << "] 度" << std::endl;
-    std::cout << "[LiDAR INIT] 垂直视场角范围: [" << fov_phi_min << ", " << fov_phi_max << "] 度" << std::endl;
-    std::cout << "[LiDAR INIT] 最大探测距离: " << fov_depth << " 米" << std::endl;
-    std::cout << "[LiDAR INIT] 水平分辨率: " << sensor_res_hor << " 度" << std::endl;
-    std::cout << "[LiDAR INIT] 垂直分辨率: " << sensor_res_vert << " 度" << std::endl;
-    std::cout << "[LiDAR INIT] 计算的深度图尺寸: " << camData_.depth_width << " x " << camData_.depth_heigth << std::endl;
-    std::cout << "[LiDAR INIT] 计算的相机内参:" << std::endl;
-    std::cout << "[LiDAR INIT] fx: " << camData_.fx << ", fy: " << camData_.fy << std::endl;
-    std::cout << "[LiDAR INIT] cx: " << camData_.cx << ", cy: " << camData_.cy << std::endl;
-    std::cout << "[LiDAR INIT] depth_maxdist: " << camData_.depth_maxdist << std::endl;
-    std::cout << "[LiDAR INIT] depth_mindist: " << camData_.depth_mindist << std::endl;
-    std::cout << "[LiDAR INIT] depth_filter_margin: " << camData_.depth_filter_margin << std::endl;
-    std::cout << "[LiDAR INIT] skip_pixel: " << camData_.skip_pixel << std::endl;
-    std::cout << "[LiDAR INIT] k_depth_scaling_factor: " << camData_.k_depth_scaling_factor << std::endl;
-    std::cout << "[LiDAR INIT] R_C_2_B: \n"
-              << camData_.R_C_2_B << std::endl;
-    std::cout << "[LiDAR INIT] T_C_2_B: " << camData_.T_C_2_B.transpose() << std::endl;
+    std::cout << "[LiDAR INIT] 使用球面投影模型初始化参数" << std::endl;
+    std::cout << "[LiDAR INIT] 水平视场角范围: [" << fov_theta_min_deg << ", " << fov_theta_max_deg << "] 度" << std::endl;
+    std::cout << "[LiDAR INIT] 垂直视场角范围: [" << fov_phi_min_deg << ", " << fov_phi_max_deg << "] 度" << std::endl;
+    std::cout << "[LiDAR INIT] 计算的深度图尺寸 (宽x高): " << camData_.polar_width << " x " << camData_.polar_height << std::endl;
 }
 
 /**
@@ -599,13 +548,14 @@ int main(int argc, char **argv)
     setCameraParam(filename);
     
     map_.setCameraParameters(
-        camData_.fx, camData_.fy, camData_.cx, camData_.cy,
-        camData_.depth_width, camData_.depth_heigth,
+        camData_.fov_theta_min_rad, camData_.fov_theta_max_rad,
+        camData_.fov_phi_min_rad, camData_.fov_phi_max_rad,
+        camData_.sensor_res_hor_rad, camData_.sensor_res_vert_rad,
+        camData_.polar_width, camData_.polar_height,
         camData_.k_depth_scaling_factor,
         camData_.depth_maxdist,
         camData_.depth_mindist,
-        camData_.skip_pixel,
-        camData_.R_C_2_B, camData_.T_C_2_B
+        camData_.R_WL, camData_.T_WL
     );
 
     map_update_timer_ = node.createTimer(ros::Duration(0.05), updateMapCallback);

@@ -2,17 +2,17 @@
 ---
 OccMap:
   resolution: 0.2 # (unit: m)
-  map_x: 80 # (unit: m)
-  map_y: 80 # (unit: m)
-  map_z: 40 # (unit: m)
+  map_x: 160 # (unit: m)
+  map_y: 160 # (unit: m)
+  map_z: 20 # (unit: m)
   voxel_depth: 1
   block_depth: 2
-  near_distance_threshold: 35.0
-  far_distance_threshold: 38.0
+  near_distance_threshold: 40.0
+  far_distance_threshold: 60.0
 
-  min_valid_ratio_sub: 0.2
-  min_valid_ratio_voxel: 0.2
-  min_valid_ratio_block: 0.1
+  min_valid_ratio_sub: 0.0
+  min_valid_ratio_voxel: 0.0
+  min_valid_ratio_block: 0.0
 
   min_valid_ratio_ratio: 0.1
 
@@ -30,25 +30,30 @@ Probability:
   # p_min: 0.10
   # p_max: 0.97
   # p_occ: 0.80
-  p_hit: 0.7
+  p_hit: 0.8
   p_miss: 0.4
   p_min: 0.12
   p_max: 0.97
   p_occ: 0.75
 
 LiDAR:
-  # 激光雷达参数
-  fov_theta_range: [-35.2, 35.2]  # 水平视场角范围 (度)
-  fov_phi_range: [-38.7, 38.7]    # 垂直视场角范围 (度)
-  fov_depth: 60.0                  # 最大探测距离 (米)
-  sensor_res_hor: 0.2             # 水平分辨率 (度)
-  sensor_res_vert: 0.8            # 垂直分辨率 (度)
+  # 激光雷达参数 livox
+  # fov_theta_range: [-35.2, 35.2]  # 水平视场角范围 (度)
+  # fov_phi_range: [-38.7, 38.7]    # 垂直视场角范围 (度)
+  # fov_depth: 60.0                  # 最大探测距离 (米)
+  # sensor_res_hor: 0.2             # 水平分辨率 (度)
+  # sensor_res_vert: 0.8            # 垂直分辨率 (度)
+  # kitti
+  fov_theta_range: [-180.0, 180.0]  # 水平视场角范围 (度)
+  fov_phi_range: [-24.8, 2]    # 垂直视场角范围 (度)
+  fov_depth: 120.0                  # 最大探测距离 (米)
+  sensor_res_hor: 0.24            # 水平分辨率 (度)
+  sensor_res_vert: 0.4            # 垂直分辨率 (度)
   
   # 处理参数
   depth_mindist: 0.1
   depth_filter_margin: 20
   skip_pixel: 4
-  min_valid_ratio: 0.1
   k_depth_scaling_factor: 1
   
   # 坐标系变换参数

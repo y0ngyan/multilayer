@@ -89,8 +89,8 @@ target_link_libraries(multilayer_lib
   ${OpenCV_LIBRARIES}
 )
 
-add_executable(multilayer_node test/multilayer_node.cpp)
-target_link_libraries(multilayer_node multilayer_lib)
+# add_executable(multilayer_node test/multilayer_node.cpp)
+# target_link_libraries(multilayer_node multilayer_lib)
 
 add_executable(pointcloud_multilayer_node test/pointcloud_multilayer_node.cpp)
 target_link_libraries(pointcloud_multilayer_node multilayer_lib)

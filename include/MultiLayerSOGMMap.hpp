@@ -219,12 +219,13 @@ private:
     double depth_threshold_block_;
 
     // 添加相机内参作为成员变量
-    double fx_, fy_, cx_, cy_;
+    double fov_theta_min_rad_, fov_theta_max_rad_, fov_phi_min_rad_, fov_phi_max_rad_;
+    double sensor_res_hor_rad_, sensor_res_vert_rad_;
     int depth_width_, depth_height_;
     double k_depth_scaling_factor_;
     double inv_depth_scaling_factor_;
-    Eigen::Matrix3d R_C_2_B_;
-    Eigen::Vector3d T_C_2_B_;
+    Eigen::Matrix3d R_WL_;
+    Eigen::Vector3d T_WL_;
 
     std::vector<int> slideClearIndex_;
 
@@ -320,18 +321,17 @@ public:
     void init(std::string filename);
     
     // 设置相机参数
-    void setCameraParameters(double fx, double fy, double cx, double cy, 
-                            int depth_width, int depth_height,
-                            double k_depth_scaling_factor = 1000.0,
-                            double depth_maxdist = 100.0,
-                            double depth_mindist = 0.1,
-                            int skip_pixel = 1,
-                            Eigen::Matrix3d R_C_2_B = Eigen::Matrix3d::Identity(),
-                            Eigen::Vector3d T_C_2_B = Eigen::Vector3d::Zero());
+    void setCameraParameters(double fov_theta_min_rad, double fov_theta_max_rad,
+                                  double fov_phi_min_rad, double fov_phi_max_rad,
+                                  double sensor_res_hor_rad, double sensor_res_vert_rad,
+                                  int polar_width, int polar_height,
+                                  double k_depth_scaling_factor, double depth_maxdist,
+                                  double depth_mindist,
+                                  const Eigen::Matrix3d& R_WL, const Eigen::Vector3d& T_WL);
 
     void update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr,
         const cv::Mat &depth_image, const Eigen::Matrix3d &R_C_2_W,
-        const Eigen::Vector3d &T_C_2_W, Eigen::Vector3d camera_pos);
+        const Eigen::Vector3d &T_C_2_W);
 
     // main interface
     std::vector<int> *getSlideClearIndex();

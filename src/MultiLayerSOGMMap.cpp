@@ -194,30 +194,37 @@ void SOGMMap::init(std::string filename)
     fs.release();
 }
 
-void SOGMMap::setCameraParameters(double fx, double fy, double cx, double cy, 
-        int depth_width, int depth_height,
-        double k_depth_scaling_factor, double depth_maxdist, 
-        double depth_mindist, int skip_pixel,
-        Eigen::Matrix3d R_C_2_B, Eigen::Vector3d T_C_2_B) {
-    fx_ = fx;
-    fy_ = fy;
-    cx_ = cx;
-    cy_ = cy;
-    depth_width_ = depth_width;
-    depth_height_ = depth_height;
+void SOGMMap::setCameraParameters(double fov_theta_min_rad, double fov_theta_max_rad,
+                                  double fov_phi_min_rad, double fov_phi_max_rad,
+                                  double sensor_res_hor_rad, double sensor_res_vert_rad,
+                                  int polar_width, int polar_height,
+                                  double k_depth_scaling_factor, double depth_maxdist,
+                                  double depth_mindist,
+                                  const Eigen::Matrix3d& R_WL, const Eigen::Vector3d& T_WL)
+{
+    // 存储球面投影参数
+    fov_theta_min_rad_ = fov_theta_min_rad;
+    fov_theta_max_rad_ = fov_theta_max_rad;
+    fov_phi_min_rad_ = fov_phi_min_rad;
+    fov_phi_max_rad_ = fov_phi_max_rad;
+    sensor_res_hor_rad_ = sensor_res_hor_rad;
+    sensor_res_vert_rad_ = sensor_res_vert_rad;
+    depth_width_ = polar_width;   // 复用 depth_width_ 和 depth_height_ 存储深度图尺寸
+    depth_height_ = polar_height;
+
+    // 存储其他通用参数
     k_depth_scaling_factor_ = k_depth_scaling_factor;
     inv_depth_scaling_factor_ = 1.0 / k_depth_scaling_factor_;
     depth_maxdist_ = depth_maxdist;
     depth_mindist_ = depth_mindist;
-    skip_pixel_ = skip_pixel;
 
-    R_C_2_B_ = R_C_2_B;
-    T_C_2_B_ = T_C_2_B;
+    R_WL_ = R_WL;
+    T_WL_ = T_WL;
 }
 
 void SOGMMap::update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr,
-        const cv::Mat &depth_image, const Eigen::Matrix3d &R_C_2_W,
-        const Eigen::Vector3d &T_C_2_W, Eigen::Vector3d camera_pos){
+        const cv::Mat &depth_image, const Eigen::Matrix3d &R_WL,
+        const Eigen::Vector3d &T_WL){
 
     static int update_count = 0;
     update_count++;
@@ -239,27 +246,27 @@ void SOGMMap::update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointClo
         }
     }
 
-    slideMap(camera_pos);
+    slideMap(T_WL);
     // ros::Time t1 = ros::Time::now();
-    raycastProcess(ptws_hit_ptr, ptws_miss_ptr, camera_pos);
+    raycastProcess(ptws_hit_ptr, ptws_miss_ptr, T_WL);
     // ros::Time t2 = ros::Time::now();
     // std::cout << "raycast time: " << (t2 - t1).toSec() * 1000 << " ms" << std::endl;
     // t1 = ros::Time::now();
-    voxelPolarProjectionProcessWithRaycast(depth_image, R_C_2_W, T_C_2_W);
+    voxelPolarProjectionProcessWithRaycast(depth_image, R_WL, T_WL);
     // t2 = ros::Time::now();
     // std::cout << "projection time: " << (t2 - t1).toSec() * 1000 << " ms" << std::endl;
 }
 
 // slide map
-void SOGMMap::slideMap(const Eigen::Vector3d camera_pos)
+void SOGMMap::slideMap(const Eigen::Vector3d T_WL)
 {
     slideClearIndex_.clear();
 
     Eigen::Vector3i new_origin_block;
     Eigen::Vector3i block_shift;
 
-    camera_pos_ = camera_pos;
-    new_origin_block = computeBlockOrigin(camera_pos);
+    camera_pos_ = T_WL;
+    new_origin_block = computeBlockOrigin(T_WL);
 
     block_shift = new_origin_block - origin_block_;
     if (block_shift(0) == 0 && block_shift(1) == 0 && block_shift(2) == 0)
@@ -272,11 +279,11 @@ void SOGMMap::slideMap(const Eigen::Vector3d camera_pos)
     origin_block_ = new_origin_block;
 }
 
-Eigen::Vector3i SOGMMap::computeBlockOrigin(const Eigen::Vector3d &camera_pos)
+Eigen::Vector3i SOGMMap::computeBlockOrigin(const Eigen::Vector3d &T_WL)
 {
     Eigen::Vector3i new_origin_block;
     // 将相机坐标转换为块索引
-    worldToBlockIdx(camera_pos, new_origin_block);
+    worldToBlockIdx(T_WL, new_origin_block);
     // 计算原点偏移量，使相机位于地图中心
     for (size_t i = 0; i < 3; i++)
     {
@@ -538,17 +545,17 @@ void SOGMMap::getBoundary(Eigen::Vector3d &origin, Eigen::Vector3d &size)
 }
 
 // help functions
-Eigen::Vector3d SOGMMap::closetPointInMap(Eigen::Vector3d pos, Eigen::Vector3d camera_pos)
+Eigen::Vector3d SOGMMap::closetPointInMap(Eigen::Vector3d pos, Eigen::Vector3d T_WL)
 {
-    Eigen::Vector3d diff = pos - camera_pos;
+    Eigen::Vector3d diff = pos - T_WL;
 
     Eigen::Vector3d map_max_boundary;
     Eigen::Vector3d map_min_boundary;
     blockIdxToWorld(origin_block_, map_min_boundary);
     blockIdxToWorld(origin_block_ + block_num_, map_max_boundary);
 
-    Eigen::Vector3d max_tc = map_max_boundary - camera_pos;
-    Eigen::Vector3d min_tc = map_min_boundary - camera_pos;
+    Eigen::Vector3d max_tc = map_max_boundary - T_WL;
+    Eigen::Vector3d min_tc = map_min_boundary - T_WL;
     double min_t = 1000000;
 
     for (size_t i = 0; i < 3; ++i)
@@ -566,11 +573,11 @@ Eigen::Vector3d SOGMMap::closetPointInMap(Eigen::Vector3d pos, Eigen::Vector3d c
         }
     }
 
-    return camera_pos + (min_t - 0.05) * diff;
+    return T_WL + (min_t - 0.05) * diff;
 }
 
 
-void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr, Eigen::Vector3d camera_pos)
+void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr, Eigen::Vector3d T_WL)
 {
     raycast_num_ += 1;
     char current_raycast = static_cast<char>(raycast_num_ & 0xFF);
@@ -583,7 +590,7 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
         flag_rayend_ = std::vector<char>(getNum(), 0);
     }
 
-    Eigen::Vector3d ray_end = camera_pos * block_res_inv_;
+    Eigen::Vector3d ray_end = T_WL * block_res_inv_;
     
     // 清空之前收集的块
     occ_blocks_.clear();
@@ -667,7 +674,7 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                     cache.processed_count++;
                 } else {
                     // 如果点不在地图中，找到地图边界附近的点
-                    pt_w = closetPointInMap(pt_w, camera_pos);
+                    pt_w = closetPointInMap(pt_w, T_WL);
                     worldToBlockIdx(pt_w, block_idx);
                 }
                 
@@ -713,7 +720,7 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                 worldToBlockIdx(pt_w, block_idx);
                 
                 if (!isBlockIdxInMap(block_idx)) {
-                    pt_w = closetPointInMap(pt_w, camera_pos);
+                    pt_w = closetPointInMap(pt_w, T_WL);
                     worldToBlockIdx(pt_w, block_idx);
                 }
                 
@@ -837,31 +844,23 @@ double SOGMMap::getAdaptiveValidRatio(double distance, LayerType layer) const {
 }
 
 VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image, 
-                                               const Eigen::Matrix3d &R_W_2_C,
-                                               const Eigen::Vector3d &T_W_2_C, 
+                                               const Eigen::Matrix3d &R_LW,
+                                               const Eigen::Vector3d &T_LW, 
                                                const Eigen::Vector3d &voxel_center,
                                                const LayerType layer_type,
                                                double resolution,
                                                double valid_ratio,
                                                double depth_threshold) {
     // === 步骤 1: 计算体素在相机坐标系下的深度区间 ===
-    Eigen::Vector3d center_camera = R_W_2_C * voxel_center + T_W_2_C;
-
-    // 如果体素中心在相机后方，直接返回
-    if (center_camera.z() <= 0) {
-        return VoxelProjectionStatus::BEHIND_CAMERA;
-    }
+    Eigen::Vector3d center_camera = R_LW * voxel_center + T_LW;
+    double distance = center_camera.norm();
+    double radius = resolution * sqrt(3.0) / 2.0;
 
     // 使用解析法计算深度区间
-    double half_res = resolution / 2.0;
-    const Eigen::RowVector3d& Rz_row = R_W_2_C.row(2);
-    double extent = half_res * (Rz_row.lpNorm<1>());
-    double voxel_z_min = center_camera.z() - extent;
-    double voxel_z_max = center_camera.z() + extent;
+    double voxel_r_min = distance - radius;
+    double voxel_r_max = distance + radius;
     
     // === 步骤 2: 计算投影范围并检查是否在图像内 ===
-    double distance = center_camera.norm();
-    double radius = half_res * sqrt(3.0);
     double min_azimuth, max_azimuth, min_elevation, max_elevation;
     computeAngularBounds(center_camera, distance, radius, min_azimuth, max_azimuth, min_elevation, max_elevation);
 
@@ -881,18 +880,18 @@ VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image,
         return VoxelProjectionStatus::OUT_OF_IMAGE;
     }
 
-    // 限制像素坐标在深度图尺寸内
-    min_u = std::max(0, std::min(min_u, depth_width_ - 1));
-    max_u = std::max(0, std::min(max_u, depth_width_ - 1));
-    min_v = std::max(0, std::min(min_v, depth_height_ - 1));
-    max_v = std::max(0, std::min(max_v, depth_height_ - 1));
+   // 限制像素坐标在深度图尺寸内
+    min_u = std::max(0, min_u);
+    max_u = std::min(depth_width_ - 1, max_u);
+    min_v = std::max(0, min_v);
+    max_v = std::min(depth_height_ - 1, max_v);
 
     // === 步骤 3: 获取传感器深度区间 ===
-    double sensor_z_min, sensor_z_max;
+    double sensor_r_min, sensor_r_max;
     double ratio = 0.0;
     
-    if (!getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max, 
-                         sensor_z_min, sensor_z_max, ratio, resolution)) {
+    if (!getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_r_min, voxel_r_max,
+                         sensor_r_min, sensor_r_max, ratio, resolution)) {
         return VoxelProjectionStatus::INSUFFICIENT_DATA;
     }
 
@@ -903,12 +902,12 @@ VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image,
     // === 步骤 4: 同时判断遮挡和匹配状态 ===
     
     // 判断是否被遮挡：体素完全在传感器测量值之前
-    if (voxel_z_min > sensor_z_max + depth_threshold) {
+    if (voxel_r_min > sensor_r_max + depth_threshold) {
         return VoxelProjectionStatus::OCCLUDED;
     }
     
     // 判断是否匹配：体素深度区间与传感器深度区间有重叠
-    if (std::max(voxel_z_min, sensor_z_min) <= std::min(voxel_z_max, sensor_z_max) + depth_threshold) {
+    if (std::max(voxel_r_min, sensor_r_min) <= std::min(voxel_r_max, sensor_r_max) + depth_threshold) {
         return VoxelProjectionStatus::MATCHED;
     }
     
@@ -1889,26 +1888,25 @@ void SOGMMap::fillVoxelGridMsg(std::vector<multilayer::VoxelGridMsg>& msg_array,
 
 // 计算点的方位角和仰角（相对于相机坐标系）
 void SOGMMap::cartesianToPolar(const Eigen::Vector3d& pt_camera, double& azimuth, double& elevation) {
-    // 确保点在相机前方
-    if (pt_camera.z() <= 0) {
-        azimuth = 0;
-        elevation = 0;
-        return;
-    }
-    
-    // 计算方位角（相对于z轴的水平角度）
-    azimuth = atan2(pt_camera.x(), pt_camera.z());
-    
-    // 计算仰角（相对于xz平面的垂直角度）
-    double dist_xz = sqrt(pt_camera.x() * pt_camera.x() + pt_camera.z() * pt_camera.z());
-    elevation = atan2(pt_camera.y(), dist_xz);
+    azimuth = atan2(pt_camera.y(), pt_camera.x());
+    elevation = atan2(pt_camera.z(), pt_camera.head<2>().norm());
 }
 
 // 极角到像素坐标的转换
 void SOGMMap::polarToPixel(double azimuth, double elevation, int& u, int& v) {
-    // 根据针孔相机模型，角度与像素坐标的关系
-    u = static_cast<int>(cx_ + fx_ * tan(azimuth) + 0.5);
-    v = static_cast<int>(cy_ + fy_ * tan(elevation) / cos(azimuth) + 0.5);
+    // 水平方向 (theta -> u, width)
+    if (azimuth < fov_theta_min_rad_ || azimuth > fov_theta_max_rad_) {
+        u = -1;
+    } else {
+        u = static_cast<int>((azimuth - fov_theta_min_rad_) / sensor_res_hor_rad_);
+    }
+
+    // 垂直方向 (phi -> v, height)
+    if (elevation < fov_phi_min_rad_ || elevation > fov_phi_max_rad_) {
+        v = -1;
+    } else {
+        v = static_cast<int>((elevation - fov_phi_min_rad_) / sensor_res_vert_rad_);
+    }
 }
 
 // 计算体素边界的极角范围
@@ -1984,7 +1982,8 @@ bool SOGMMap::getDepthInterval(const cv::Mat &depth_image,
         const uint16_t* row_ptr = depth_image.ptr<uint16_t>(v);
         for (int u = min_u; u <= max_u; u += step_u) {
             if (u < 0 || u >= depth_width_) continue;
-            double pixel_depth = static_cast<double>(row_ptr[u]) * inv_depth_scaling_factor_;
+            // double pixel_depth = static_cast<double>(row_ptr[u]) * inv_depth_scaling_factor_;
+            double pixel_depth = static_cast<double>(row_ptr[u]);
             if (pixel_depth > depth_mindist_ && pixel_depth < depth_maxdist_) {
                 if (!found_valid_depth) {
                     found_valid_depth = true;
@@ -2012,6 +2011,7 @@ bool SOGMMap::getDepthInterval(const cv::Mat &depth_image,
         // std::cout<< "z_min: " << sensor_z_min << ", z_max: " << sensor_z_max << std::endl;
         return false;
     }
+    // std::cout << "Valid pixels: " << valid_pixels << ", Total pixels: " << total_pixels << std::endl;
 
     ratio = static_cast<double>(valid_pixels) / total_pixels;
 
