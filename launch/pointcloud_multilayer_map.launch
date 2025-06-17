@@ -1,10 +1,11 @@
 <launch>
 
     <node pkg="multilayer" name="pointcloud_multilayer_node" type="pointcloud_multilayer_node" output="screen">
-
-        <remap from="/odom" to="/aft_mapped_to_init"/>
-        <!-- <remap from="/depth" to="/depth_image"/> -->
-        <remap from="/pointcloud" to="/livox/pointcloud2"/>
+        <rosparam command="load" file="$(find multilayer)/config/segmentation_params.yaml" />
+        <!-- <remap from="/odom" to="/aft_mapped_to_init"/>
+        <remap from="/pointcloud" to="/livox/pointcloud2"/> -->
+        <remap from="/odom" to="/odom_pose"/>
+        <remap from="/pointcloud" to="/velodyne_points"/>
 
         <param name="frame_id" value="map" type="string"/>
         <param name="child_frame_id" value="base_link" type="string"/>

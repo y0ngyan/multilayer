@@ -67,6 +67,9 @@
   <build_export_depend>geometry_msgs</build_export_depend>
   <exec_depend>geometry_msgs</exec_depend>
 
+  <!-- 添加 patchworkpp 依赖 -->
+  <depend>patchworkpp</depend>
+
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

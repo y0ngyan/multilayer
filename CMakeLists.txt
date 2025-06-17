@@ -81,6 +81,7 @@ target_include_directories(multilayer_lib
   ${OpenCV_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
   ${Eigen3_INCLUDE_DIRS}
+  ../patchwork-plusplus-ros/include
 )
 
 target_link_libraries(multilayer_lib
@@ -89,11 +90,13 @@ target_link_libraries(multilayer_lib
   ${OpenCV_LIBRARIES}
 )
 
-add_executable(multilayer_node test/multilayer_node.cpp)
-target_link_libraries(multilayer_node multilayer_lib)
+# add_executable(multilayer_node test/multilayer_node.cpp)
+# target_link_libraries(multilayer_node multilayer_lib)
 
 add_executable(pointcloud_multilayer_node test/pointcloud_multilayer_node.cpp)
+target_include_directories(pointcloud_multilayer_node PRIVATE ../patchwork-plusplus-ros/include)
 target_link_libraries(pointcloud_multilayer_node multilayer_lib)
 
 add_executable(local_map_visualizer_node test/local_map_visualizer_node.cpp)
+target_include_directories(pointcloud_multilayer_node PRIVATE ../patchwork-plusplus-ros/include)
 target_link_libraries(local_map_visualizer_node multilayer_lib)
