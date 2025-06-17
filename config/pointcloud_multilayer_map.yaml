@@ -2,8 +2,13 @@
 ---
 OccMap:
   resolution: 0.2 # (unit: m)
+<<<<<<< Updated upstream
   map_x: 160 # (unit: m)
   map_y: 160 # (unit: m)
+=======
+  map_x: 100 # (unit: m)
+  map_y: 100 # (unit: m)
+>>>>>>> Stashed changes
   map_z: 20 # (unit: m)
   voxel_depth: 1
   block_depth: 2
@@ -37,17 +42,29 @@ Probability:
   p_occ: 0.75
 
 LiDAR:
+<<<<<<< Updated upstream
   # 激光雷达参数 livox
+=======
+  # 激光雷达参数
+>>>>>>> Stashed changes
   # fov_theta_range: [-35.2, 35.2]  # 水平视场角范围 (度)
   # fov_phi_range: [-38.7, 38.7]    # 垂直视场角范围 (度)
   # fov_depth: 60.0                  # 最大探测距离 (米)
   # sensor_res_hor: 0.2             # 水平分辨率 (度)
   # sensor_res_vert: 0.8            # 垂直分辨率 (度)
+<<<<<<< Updated upstream
   # kitti
   fov_theta_range: [-180.0, 180.0]  # 水平视场角范围 (度)
   fov_phi_range: [-24.8, 2]    # 垂直视场角范围 (度)
   fov_depth: 120.0                  # 最大探测距离 (米)
   sensor_res_hor: 0.24            # 水平分辨率 (度)
+=======
+
+  fov_theta_range: [-45.0, 45.0]  # 水平视场角范围 (度)
+  fov_phi_range: [-24.8, 2.0]    # 垂直视场角范围 (度)
+  fov_depth: 120.0                  # 最大探测距离 (米)
+  sensor_res_hor: 0.12            # 水平分辨率 (度)
+>>>>>>> Stashed changes
   sensor_res_vert: 0.4            # 垂直分辨率 (度)
   
   # 处理参数

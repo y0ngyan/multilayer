@@ -12,7 +12,11 @@ Panels:
         - /subvoxel1
         - /PointCloud21
       Splitter Ratio: 0.5
+<<<<<<< Updated upstream
     Tree Height: 623
+=======
+    Tree Height: 519
+>>>>>>> Stashed changes
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -30,7 +34,11 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
+<<<<<<< Updated upstream
     SyncSource: voxel
+=======
+    SyncSource: ""
+>>>>>>> Stashed changes
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -75,6 +83,7 @@ Visualization Manager:
       Frame Timeout: 100
       Frames:
         All Enabled: true
+<<<<<<< Updated upstream
         base_link:
           Value: true
         camera_gray_left:
@@ -89,6 +98,8 @@ Visualization Manager:
           Value: true
         velodyne:
           Value: true
+=======
+>>>>>>> Stashed changes
       Marker Alpha: 1
       Marker Scale: 5
       Name: TF
@@ -96,6 +107,7 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
+<<<<<<< Updated upstream
         map:
           base_link:
             {}
@@ -108,6 +120,9 @@ Visualization Manager:
               {}
             velodyne:
               {}
+=======
+        {}
+>>>>>>> Stashed changes
       Update Interval: 0
       Value: true
     - Class: rviz/Marker
@@ -123,7 +138,7 @@ Visualization Manager:
       Marker Topic: /map/range/slide
       Name: range_slide
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/Image
@@ -143,14 +158,19 @@ Visualization Manager:
       Marker Topic: /map/range/local
       Name: Marker
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
+<<<<<<< Updated upstream
         Max Value: -42
         Min Value: -61.20000076293945
+=======
+        Max Value: -132.39999389648438
+        Min Value: -148.39999389648438
+>>>>>>> Stashed changes
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -177,8 +197,13 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
+<<<<<<< Updated upstream
         Max Value: -9999
         Min Value: 9999
+=======
+        Max Value: -134.1999969482422
+        Min Value: -145.39999389648438
+>>>>>>> Stashed changes
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -205,8 +230,13 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
+<<<<<<< Updated upstream
         Max Value: -44.70000076293945
         Min Value: -59.099998474121094
+=======
+        Max Value: -130.89999389648438
+        Min Value: -145.5
+>>>>>>> Stashed changes
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -242,7 +272,11 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
+<<<<<<< Updated upstream
       Enabled: false
+=======
+      Enabled: true
+>>>>>>> Stashed changes
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -257,7 +291,11 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
+<<<<<<< Updated upstream
       Value: false
+=======
+      Value: true
+>>>>>>> Stashed changes
   Enabled: true
   Global Options:
     Background Color: 46; 52; 54
@@ -285,16 +323,32 @@ Visualization Manager:
   Value: true
   Views:
     Current:
+<<<<<<< Updated upstream
       Class: rviz/FrameAligned
+=======
+      Class: rviz/XYOrbit
+      Distance: 414.8402099609375
+>>>>>>> Stashed changes
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
+<<<<<<< Updated upstream
+=======
+      Field of View: 0.7853981852531433
+      Focal Point:
+        X: 42.19260787963867
+        Y: 27.472652435302734
+        Z: -1.4364855815074407e-05
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+>>>>>>> Stashed changes
       Invert Z Axis: false
       Lock Camera: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
+<<<<<<< Updated upstream
       Pitch: 2.5161874294281006
       Point towards: arbitrary
       Position:
@@ -304,6 +358,11 @@ Visualization Manager:
       Roll: -3.1415927410125732
       Target Frame: vehicle
       Yaw: 0.6653982996940613
+=======
+      Pitch: 0.5353983640670776
+      Target Frame: vehicle
+      Yaw: 1.0003987550735474
+>>>>>>> Stashed changes
     Saved:
       - Class: rviz/FrameAligned
         Enable Stereo Rendering:
@@ -352,7 +411,11 @@ Window Geometry:
   Hide Right Dock: false
   Image:
     collapsed: false
+<<<<<<< Updated upstream
   QMainWindow State: 000000ff00000000fd0000000400000000000001560000035ffc0200000008fb000000100044006900730070006c006100790073010000003d000002fa000000c900fffffffb0000001200530065006c0065006300740069006f006e010000033d0000005f0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f0000035ffc0200000005fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d00000143000000a400fffffffb0000000a0049006d00610067006501000001860000010a0000001600fffffffb0000000a006400650070007400680100000296000001060000001600fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000073800000039fc0100000002fb0000000800540069006d0065010000000000000738000003bc00fffffffb0000000800540069006d00650100000000000004500000000000000000000004c70000035f00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+=======
+  QMainWindow State: 000000ff00000000fd0000000400000000000001560000035ffc0200000008fb000000100044006900730070006c006100790073010000003d00000292000000c900fffffffb0000001200530065006c0065006300740069006f006e01000002d5000000c70000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f0000035ffc0200000005fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d00000143000000a400fffffffb0000000a0049006d00610067006501000001860000010a0000001600fffffffb0000000a006400650070007400680100000296000001060000001600fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000073800000039fc0100000002fb0000000800540069006d0065010000000000000738000003bc00fffffffb0000000800540069006d00650100000000000004500000000000000000000004c70000035f00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+>>>>>>> Stashed changes
   Selection:
     collapsed: false
   Time:
