@@ -51,22 +51,6 @@ struct cameraData
     pcl::PointCloud<pcl::PointXYZ> ptws_hit, ptws_miss;
 };
 
-struct SegmentedClouds {
-    // 用于生成深度图和角度分割（需要传感器坐标系）
-    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> sensor_frame_clouds;
-    // 用于地图更新（需要世界坐标系）
-    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> world_frame_clouds;
-
-    SegmentedClouds(size_t n) {
-        sensor_frame_clouds.resize(n);
-        world_frame_clouds.resize(n);
-        for(size_t i = 0; i < n; ++i) {
-            sensor_frame_clouds[i].reset(new pcl::PointCloud<pcl::PointXYZ>());
-            world_frame_clouds[i].reset(new pcl::PointCloud<pcl::PointXYZ>());
-        }
-    }
-};
-
 using PointType = pcl::PointXYZI;
 boost::shared_ptr<PatchWorkpp<PointType>> ground_segmentation;
 // 两个发布者，用于发布地面和非地面点云
@@ -300,7 +284,12 @@ cv::Mat convertPointCloudToDepthImage(const pcl::PointCloud<pcl::PointXYZ>::Ptr&
     return depth_image_16u;
 }
 
-void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg,
+/**
+ * @brief 点云和里程计数据的回调函数 (最终修正版：完整处理四虚拟相机及外参)
+ * @param cloud_msg 完整的360度点云数据
+ * @param odom 里程计数据
+ */
+void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg, 
                            const nav_msgs::OdometryConstPtr &odom)
 {
     static int update_num = 0;
@@ -327,140 +316,137 @@ void pointCloudOdomCallback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg,
                                           odom->header.stamp, frame_id_, child_frame_id_));
 
     // ======================== 2. 点云预处理和分割 ========================
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr full_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<PointType>::Ptr full_cloud(new pcl::PointCloud<PointType>);
     pcl::fromROSMsg(*cloud_msg, *full_cloud);
 
-    pcl::PointCloud<PointType> ground_cloud_sensor;   // 原始地面点 (传感器坐标系)
-    pcl::PointCloud<PointType> nonground_cloud_sensor; // 原始非地面点 (传感器坐标系)
+    pcl::PointCloud<PointType> ground_cloud;
+    pcl::PointCloud<PointType> nonground_cloud;
     double time_taken;
-    ground_segmentation->estimate_ground(*full_cloud, ground_cloud_sensor, nonground_cloud_sensor, time_taken);
+
+    ground_segmentation->estimate_ground(*full_cloud, ground_cloud, nonground_cloud, time_taken);
 
     sensor_msgs::PointCloud2 ground_msg, nonground_msg;
-    pcl::toROSMsg(ground_cloud_sensor, ground_msg);
+    pcl::toROSMsg(ground_cloud, ground_msg);
     ground_msg.header = cloud_msg->header;
-    pcl::toROSMsg(nonground_cloud_sensor, nonground_msg);
+
+    pcl::toROSMsg(nonground_cloud, nonground_msg);
     nonground_msg.header = cloud_msg->header;
 
     ground_pub.publish(ground_msg);
     nonground_pub.publish(nonground_msg);
 
-    // ======================== 3. 一次性坐标变换与数据规整 ========================
-
-    // a. 初始化地面置信度统计容器
-    std::unordered_map<int, std::pair<int, int>> block_observation_counts;
-
-    // b. 处理地面点 (只需变换一次，用于置信度统计)
-    for (const auto& point : ground_cloud_sensor.points) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
-
-        Eigen::Vector3d pt_world = R_LIDAR_2_W * Eigen::Vector3d(point.x, point.y, point.z) + T_LIDAR_2_W;
-
-        Eigen::Vector3i block_idx;
-        map_.worldToBlockIdx(pt_world, block_idx);
-
-        int linear_idx;
-        map_.blockIdxToLocalLinear(block_idx, linear_idx);
-        if (linear_idx >= 0) {
-            block_observation_counts[linear_idx].first++;
-        }
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> segmented_clouds(4);
+    for(int i=0; i<4; ++i) {
+        segmented_clouds[i].reset(new pcl::PointCloud<pcl::PointXYZ>());
     }
 
-    // c. 处理非地面点 (变换一次，结果兵分两路)
-    const size_t num_segments = 4;
-    SegmentedClouds nonground_segmented(num_segments);
     const double rad_45 = M_PI / 4.0;
     const double rad_135 = 3.0 * M_PI / 4.0;
 
-    for (const auto& point : nonground_cloud_sensor.points) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
-
-        Eigen::Vector3d pt_sensor(point.x, point.y, point.z);
-        // --- 执行唯一一次坐标变换 ---
-        Eigen::Vector3d pt_world = R_LIDAR_2_W * pt_sensor + T_LIDAR_2_W;
-
-        // --- 任务1: 更新地面置信度统计 ---
-        Eigen::Vector3i block_idx;
-        map_.worldToBlockIdx(pt_world, block_idx);
-        int linear_idx;
-        map_.blockIdxToLocalLinear(block_idx, linear_idx);
-        if (linear_idx >= 0) {
-            block_observation_counts[linear_idx].second++;
-        }
-
-        // --- 任务2: 按角度分割，存储两种坐标系的点 ---
-        double angle = std::atan2(-pt_sensor.y(), pt_sensor.x());
-        int segment_idx = -1;
-
-        if (std::abs(angle) <= rad_45) { segment_idx = 0; } // 前
-        else if (angle > rad_45 && angle <= rad_135) { segment_idx = 1; } // 左
-        else if (angle < -rad_45 && angle >= -rad_135) { segment_idx = 2; } // 右
-        else { segment_idx = 3; } // 后
-
-        if (segment_idx != -1) {
-            nonground_segmented.sensor_frame_clouds[segment_idx]->points.emplace_back(point.x, point.y, point.z);
-            nonground_segmented.world_frame_clouds[segment_idx]->points.emplace_back(pt_world.x(), pt_world.y(), pt_world.z());
-        }
-    }
-
-    // ======================== 4. 地图更新（占据+置信度）========================
+    for (const auto& point : full_cloud->points)
     {
-        std::lock_guard<std::mutex> lock(map_mutex_);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+        
+        double angle = std::atan2(-point.y, point.x);
 
-        // a. 更新地面置信度
-        map_.updateGroundConfidence(block_observation_counts);
-
-        // b. 更新占据状态
-        std::vector<Eigen::Matrix3d> virtual_cam_rotations(num_segments);
-        virtual_cam_rotations[0] = Eigen::Matrix3d::Identity();
-        virtual_cam_rotations[1] = Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-        virtual_cam_rotations[2] = Eigen::AngleAxisd(-M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-        virtual_cam_rotations[3] = Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-
-        std::vector<ros::Publisher*> depth_publishers = {
-            &generated_depth_pub_front_, &generated_depth_pub_left_,
-            &generated_depth_pub_right_, &generated_depth_pub_back_
-        };
-        std::vector<std::string> direction_names = {"front", "left", "right", "back"};
-
-        for (int i = 0; i < num_segments; ++i)
-        {
-            // 直接使用已变换好的世界坐标点作为 hit 点，无需再变换
-            pcl::PointCloud<pcl::PointXYZ>::Ptr ptws_hit = nonground_segmented.world_frame_clouds[i];
-            if (ptws_hit->empty()) continue;
-
-            // 使用传感器坐标点云生成深度图
-            pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_for_depth_creation(new pcl::PointCloud<pcl::PointXYZ>);
-            Eigen::Matrix3d rot_to_front = virtual_cam_rotations[i].transpose();
-            for (const auto& point : *nonground_segmented.sensor_frame_clouds[i]) {
-                Eigen::Vector3d p(point.x, point.y, point.z);
-                Eigen::Vector3d rotated_p = rot_to_front * p;
-                cloud_for_depth_creation->points.push_back(pcl::PointXYZ(rotated_p.x(), rotated_p.y(), rotated_p.z()));
-            }
-            cv::Mat depth_image = convertPointCloudToDepthImage(cloud_for_depth_creation);
-
-            // 发布调试用的深度图
-            if (depth_publishers[i]->getNumSubscribers() > 0) {
-                 try {
-                    sensor_msgs::ImagePtr depth_msg = cv_bridge::CvImage(cloud_msg->header, "16UC1", depth_image).toImageMsg();
-                    depth_msg->header.frame_id = frame_id_ + "_" + direction_names[i];
-                    depth_publishers[i]->publish(depth_msg);
-                } catch (cv_bridge::Exception& e) {
-                    ROS_ERROR("cv_bridge exception for %s depth image: %s", direction_names[i].c_str(), e.what());
-                }
-            }
-
-            // 计算位姿并调用地图更新
-            Eigen::Matrix3d R_VIRTUAL_2_W = R_LIDAR_2_W * virtual_cam_rotations[i];
-            Eigen::Matrix3d R_FINAL_CAM_2_W = R_VIRTUAL_2_W * camData_.R_C_2_B;
-            Eigen::Vector3d T_FINAL_CAM_2_W = T_LIDAR_2_W + R_VIRTUAL_2_W * camData_.T_C_2_B;
-
-            pcl::PointCloud<pcl::PointXYZ> ptws_miss;
-            map_.update(ptws_hit.get(), &ptws_miss, depth_image, R_FINAL_CAM_2_W, T_FINAL_CAM_2_W, camData_.camera_pos);
+        if (std::abs(angle) <= rad_45) { // 前方
+            segmented_clouds[0]->points.emplace_back(point.x, point.y, point.z);
+        } else if (angle > rad_45 && angle <= rad_135) { // 左方
+            segmented_clouds[1]->points.emplace_back(point.x, point.y, point.z);
+        } else if (angle < -rad_45 && angle >= -rad_135) { // 右方
+            segmented_clouds[2]->points.emplace_back(point.x, point.y, point.z);
+        } else { // 后方
+            segmented_clouds[3]->points.emplace_back(point.x, point.y, point.z);
         }
     }
 
-    t2 = ros::Time::now();
+    // ======================== 3. 循环处理四个虚拟相机 ========================
+    
+    std::vector<Eigen::Matrix3d> virtual_cam_rotations(4);
+    virtual_cam_rotations[0] = Eigen::Matrix3d::Identity(); // 前
+    virtual_cam_rotations[1] = Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();  // 左
+    virtual_cam_rotations[2] = Eigen::AngleAxisd(-M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix(); // 右
+    virtual_cam_rotations[3] = Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();        // 后
+    
+    // 定义四个方向的发布器数组
+    std::vector<ros::Publisher*> depth_publishers = {
+        &generated_depth_pub_front_,
+        &generated_depth_pub_left_,
+        &generated_depth_pub_right_,
+        &generated_depth_pub_back_
+    };
+    
+    std::vector<std::string> direction_names = {"front", "left", "right", "back"};
 
+    std::lock_guard<std::mutex> lock(map_mutex_);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr current_cloud = segmented_clouds[i];
+        if (current_cloud->empty()) continue;
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_for_depth(new pcl::PointCloud<pcl::PointXYZ>);
+        Eigen::Matrix3d rot_to_front = virtual_cam_rotations[i].transpose();
+        for (const auto& point : current_cloud->points)
+        {
+            Eigen::Vector3d p(point.x, point.y, point.z);
+            Eigen::Vector3d rotated_p = rot_to_front * p;
+            cloud_for_depth->points.push_back(pcl::PointXYZ(rotated_p.x(), rotated_p.y(), rotated_p.z()));
+        }
+
+        cv::Mat depth_image = convertPointCloudToDepthImage(cloud_for_depth);
+
+        // ======================== 新增：发布当前方向的深度图 ========================
+        if (depth_publishers[i]->getNumSubscribers() > 0)
+        {
+            try {
+                sensor_msgs::ImagePtr depth_msg = cv_bridge::CvImage(
+                    cloud_msg->header, 
+                    "16UC1",  // 16位无符号整型深度图
+                    depth_image
+                ).toImageMsg();
+                
+                // 修改frame_id以区分不同方向
+                depth_msg->header.frame_id = frame_id_ + "_" + direction_names[i];
+                depth_publishers[i]->publish(depth_msg);
+            } catch (cv_bridge::Exception& e) {
+                ROS_ERROR("cv_bridge exception for %s depth image: %s", direction_names[i].c_str(), e.what());
+            }
+        }
+
+        pcl::PointCloud<pcl::PointXYZ> ptws_hit;
+        for (const auto& point : current_cloud->points)
+        {
+            Eigen::Vector3d pt_c(point.x, point.y, point.z);
+            if (pt_c.norm() >= camData_.depth_mindist && pt_c.norm() <= camData_.depth_maxdist)
+            {
+                Eigen::Vector3d pt_w = R_LIDAR_2_W * pt_c + T_LIDAR_2_W;
+                ptws_hit.points.push_back(pcl::PointXYZ(pt_w(0), pt_w(1), pt_w(2)));
+            }
+        }
+        if (ptws_hit.empty()) continue;
+
+        // c. 计算当前虚拟相机的完整世界位姿 (包含R_C_2_B外参)
+        Eigen::Matrix3d R_VIRTUAL_2_W = R_LIDAR_2_W * virtual_cam_rotations[i];
+        
+        // ======================== 修正1: 旋转部分 ========================
+        // 最终的光学坐标系旋转 = (世界 <- 载体) * (载体 <- 虚拟相机) * (虚拟相机 <- 光学坐标系)
+        // 这里的 camData_.R_C_2_B 就是 (虚拟相机 <- 光学坐标系) 的旋转
+        Eigen::Matrix3d R_FINAL_CAM_2_W = R_VIRTUAL_2_W * camData_.R_C_2_B;
+
+        // ======================== 修正2: 平移部分 ========================
+        // 最终的光学坐标系平移 = 载体世界平移 + 载体世界旋转 * (虚拟相机相对载体平移 + 虚拟相机旋转 * 光学坐标系相对虚拟相机平移)
+        // T_C_W = T_B_W + R_B_W * T_V_B + R_B_W * R_V_B * T_C_V
+        // T_V_B 为零, T_C_V 就是 camData_.T_C_2_B
+        Eigen::Vector3d T_FINAL_CAM_2_W = T_LIDAR_2_W + R_VIRTUAL_2_W * camData_.T_C_2_B;
+        
+        // d. 使用修正后的完整位姿调用地图更新函数
+        pcl::PointCloud<pcl::PointXYZ> ptws_miss;
+        map_.update(&ptws_hit, &ptws_miss, depth_image, R_FINAL_CAM_2_W, T_FINAL_CAM_2_W, camData_.camera_pos);
+    }
+    t2 = ros::Time::now();
+    
     publishLocalUpdateRange();
     publishSlideGlobalGridMapRange();
 

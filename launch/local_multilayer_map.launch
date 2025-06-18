@@ -5,8 +5,8 @@
         <!-- <remap from="/odom" to="/t265/odom/sample"/>
         <remap from="/depth" to="/D455/depth/image_rect_raw"/> -->
 
-        <!-- <remap from="/odom" to="/t265/odom/sample"/>
-        <remap from="/depth" to="/d400/depth/image_rect_raw"/> -->
+        <remap from="/odom" to="/t265/odom/sample"/>
+        <remap from="/depth" to="/d400/depth/image_rect_raw"/>
 
         <!-- <remap from="/odom" to="/pose"/>
         <remap from="/depth" to="/camera/depth/image"/> -->
@@ -14,8 +14,8 @@
         <!-- <remap from="/odom" to="/mavros/local_position/odom"/>
         <remap from="/depth" to="/realsense_plugin/camera/depth/image_raw"/> -->
 
-        <remap from="/odom" to="/tesse/odom"/>
-        <remap from="/depth" to="/tesse/depth_cam/mono/image_raw"/>
+        <!-- <remap from="/odom" to="/tesse/odom"/>
+        <remap from="/depth" to="/tesse/depth_cam/mono/image_raw"/> -->
 
         <param name="frame_id" value="map" type="string"/>
         <param name="child_frame_id" value="base_link" type="string"/>

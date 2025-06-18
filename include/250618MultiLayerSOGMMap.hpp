@@ -100,36 +100,21 @@ public:
 
 class Block {
 public:
-    std::vector<Voxel*> voxels_;
-    float occupancy_value_;
-    bool is_voxel_allocated_;
-    bool is_free_;
+    std::vector<Voxel*> voxels_;         // 体素指针数组 
+    float occupancy_value_;              // 块整体的占据概率值
+    bool is_voxel_allocated_;            // 是否已分配体素
+    bool is_free_;                  // 是否空闲
     LayerType layer_;
-
-    // --- [需求 1.1] 新增成员 ---
-    float ground_confidence_log_; // 地面置信度的对数概率
-
+    
     // Block的构造和析构函数
     Block() : is_voxel_allocated_(false),
-              occupancy_value_(0.0f),
+              occupancy_value_(0.0f), 
               layer_(LayerType::BLOCK),
-              is_free_(true),
-              ground_confidence_log_(0.0f) // 在构造时初始化
-              {}
-
+              is_free_(true) {}
+    
     // 检查块是否空闲
     bool is_free() const {
         return is_free_;
-    }
-
-    // --- [需求 1.1] 新增访问方法 ---
-    /**
-     * @brief 判断该块是否被认定为稳定的地面块
-     * @param threshold_log 地面判定的置信度阈值 (log-odds形式)
-     * @return 如果地面置信度超过阈值，则为 true
-     */
-    bool isGroundBlock(float threshold_log) const {
-        return ground_confidence_log_ > threshold_log;
     }
 
     void allocate_voxels(unsigned int total_voxels, const float value, ObjectPool<Voxel>& voxel_pool){
@@ -249,13 +234,6 @@ private:
 
     float prob_hit_log_, prob_miss_log_, clamp_min_log_, clamp_max_log_, min_occupancy_log_;
 
-    // --- [需求 1.2] 新增地面置信度参数 ---
-    float ground_confidence_hit_log_;
-    float ground_confidence_miss_log_;
-    float ground_confidence_threshold_log_;
-    float ground_confidence_min_log_;
-    float ground_confidence_max_log_;
-
     // 距离阈值
     double near_distance_threshold_;  // 近距离阈值，使用子体素
     double far_distance_threshold_;   // 远距离阈值，使用块
@@ -358,14 +336,8 @@ public:
     void update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointCloud<pcl::PointXYZ> *ptws_miss_ptr,
         const cv::Mat &depth_image, const Eigen::Matrix3d &R_C_2_W,
         const Eigen::Vector3d &T_C_2_W, Eigen::Vector3d camera_pos);
-        
-    // --- [需求 2.1 & 2.2] 新增接口，用于更新地面置信度 ---
-    /**
-     * @brief 根据地面和非地面点的观测数量，更新Block的地面置信度
-     * @param block_observation_counts 一个map，key为block线性索引，value为(地面点计数, 非地面点计数)
-     */
-    void updateGroundConfidence(const std::unordered_map<int, std::pair<int, int>>& block_observation_counts);
-
+    
+    void updateGroundBlocks(const pcl::PointCloud<pcl::PointXYZ>& ground_cloud);
     // main interface
     std::vector<int> *getSlideClearIndex();
     float getOccupancy(const Eigen::Vector3d pos);

@@ -10,6 +10,7 @@ Panels:
         - /block1
         - /voxel1
         - /subvoxel1
+        - /ground1
         - /PointCloud21
       Splitter Ratio: 0.5
     Tree Height: 606
@@ -128,7 +129,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/Image
       Enabled: true
-      Image Topic: /tesse/left_cam/rgb/image_raw
+      Image Topic: /semantickitti/camera_gray_left/image_raw
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -149,8 +150,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: -29.200000762939453
-        Min Value: -49.20000076293945
+        Max Value: 11.600000381469727
+        Min Value: 2
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -177,8 +178,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: -29
-        Min Value: -35.79999923706055
+        Max Value: 9.399999618530273
+        Min Value: 3
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -205,8 +206,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: -27.299999237060547
-        Min Value: -36.70000076293945
+        Max Value: 9.5
+        Min Value: 2.0999999046325684
         Value: true
       Axis: Z
       Channel Name: intensity
@@ -239,10 +240,38 @@ Visualization Manager:
       Axis: Z
       Channel Name: intensity
       Class: rviz/PointCloud2
+      Color: 0; 255; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: ground
+      Position Transformer: XYZ
+      Queue Size: 10
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.800000011920929
+      Style: Boxes
+      Topic: /map/local_vis/confident_ground
+      Unreliable: false
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz/PointCloud2
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -257,7 +286,7 @@ Visualization Manager:
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 46; 52; 54
@@ -295,15 +324,15 @@ Visualization Manager:
       Lock Camera: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 2.5417966842651367
+      Pitch: 0.6749988198280334
       Point towards: arbitrary
       Position:
-        X: 60.450950622558594
-        Y: 71.85258483886719
-        Z: 75.18429565429688
-      Roll: -3.141592502593994
+        X: 19.229265213012695
+        Y: 26.541898727416992
+        Z: 30.13825225830078
+      Roll: 0
       Target Frame: vehicle
-      Yaw: 0.908157467842102
+      Yaw: -2.1850059032440186
     Saved:
       - Class: rviz/FrameAligned
         Enable Stereo Rendering:
@@ -363,6 +392,6 @@ Window Geometry:
     collapsed: false
   Width: 1848
   X: 406
-  Y: 16
+  Y: 0
   depth:
     collapsed: false

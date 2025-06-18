@@ -2,13 +2,13 @@
 ---
 OccMap:
   resolution: 0.2 # (unit: m)
-  map_x: 160 # (unit: m)
-  map_y: 160 # (unit: m)
+  map_x: 100 # (unit: m)
+  map_y: 100 # (unit: m)
   map_z: 20 # (unit: m)
   voxel_depth: 1
   block_depth: 2
-  near_distance_threshold: 50.0
-  far_distance_threshold: 60.0
+  near_distance_threshold: 25.0
+  far_distance_threshold: 40.0
 
   min_valid_ratio_sub: 0.2
   min_valid_ratio_voxel: 0.2
@@ -35,14 +35,6 @@ Probability:
   p_min: 0.12
   p_max: 0.97
   p_occ: 0.75
-
-# --- [需求 1.2] 新增地面置信度参数配置 ---
-GroundProbability:
-  p_hit: 0.65       # 观测到地面点时，置信度更新对应的概率值
-  p_miss: 0.40      # 观测到非地面点时，置信度更新对应的概率值
-  p_min: 0.12       # 置信度的最小钳位值 (等同于占据概率的p_min)
-  p_max: 0.97       # 置信度的最大钳位值 (等同于占据概率的p_max)
-  p_threshold: 0.90 # 判定为稳定地面块的概率阈值
 
 LiDAR:
   # 激光雷达参数

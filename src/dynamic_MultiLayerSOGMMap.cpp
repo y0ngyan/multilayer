@@ -182,24 +182,6 @@ void SOGMMap::init(std::string filename)
     std::cout << "[SOGMMap] prob_max: " << prob_max << ", logit: " << clamp_max_log_ << std::endl;
     std::cout << "[SOGMMap] prob_occupancy: " << prob_occupancy << ", logit: " << min_occupancy_log_ << std::endl;
 
-    // --- [需求 1.2] 读取新增的地面置信度参数 ---
-    cv::FileNode GroundProb_node = fs["GroundProbability"]; // 从新的 "GroundProbability" 节点读取
-    double ground_prob_hit = (float)(GroundProb_node["p_hit"]);
-    double ground_prob_miss = (float)(GroundProb_node["p_miss"]);
-    double ground_prob_min = (float)(GroundProb_node["p_min"]);
-    double ground_prob_max = (float)(GroundProb_node["p_max"]);
-    double ground_prob_threshold = (float)(GroundProb_node["p_threshold"]);
-
-    ground_confidence_hit_log_ = logit(ground_prob_hit);
-    ground_confidence_miss_log_ = logit(ground_prob_miss);
-    ground_confidence_min_log_ = logit(ground_prob_min);
-    ground_confidence_max_log_ = logit(ground_prob_max);
-    ground_confidence_threshold_log_ = logit(ground_prob_threshold);
-    
-    std::cout << "[SOGMMap] Ground prob_hit: " << ground_prob_hit << ", logit: " << ground_confidence_hit_log_ << std::endl;
-    std::cout << "[SOGMMap] Ground prob_miss: " << ground_prob_miss << ", logit: " << ground_confidence_miss_log_ << std::endl;
-    std::cout << "[SOGMMap] Ground prob_threshold: " << ground_prob_threshold << ", logit: " << ground_confidence_threshold_log_ << std::endl;
-
     // 初始化数据结构
     slideClearIndex_.clear();
 
@@ -266,97 +248,6 @@ void SOGMMap::update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointClo
     voxelPolarProjectionProcessWithRaycast(depth_image, R_C_2_W, T_C_2_W);
     // t2 = ros::Time::now();
     // std::cout << "projection time: " << (t2 - t1).toSec() * 1000 << " ms" << std::endl;
-}
-
-/**
- * @brief [需求 2 & 3] 根据观测计数更新Block的地面置信度，并根据置信度强制切换层级
- */
-void SOGMMap::updateGroundConfidence(const std::unordered_map<int, std::pair<int, int>>& block_observation_counts)
-{
-    updated_ground_block_indices_.clear();
-
-    // 如果没有需要更新的块，则直接返回
-    if (block_observation_counts.empty()) {
-        return;
-    }
-
-    // 将需要更新的 block 索引提取到 vector 中，便于多线程划分任务
-    std::vector<int> blocks_to_update;
-    blocks_to_update.reserve(block_observation_counts.size());
-    for (const auto& pair : block_observation_counts) {
-        blocks_to_update.push_back(pair.first);
-    }
-
-    // --- [需求 4.2] 多线程处理 ---
-    int num_blocks = blocks_to_update.size();
-    int blocks_per_thread = (num_blocks + num_projection_threads_ - 1) / num_projection_threads_;
-    
-    std::vector<std::thread> threads;
-    threads.reserve(num_projection_threads_);
-
-    for (int t = 0; t < num_projection_threads_; ++t) {
-        size_t start_idx = t * blocks_per_thread;
-        size_t end_idx = std::min(start_idx + blocks_per_thread, static_cast<size_t>(num_blocks));
-
-        if (start_idx >= end_idx) {
-            continue;
-        }
-
-        threads.emplace_back([this, &blocks_to_update, &block_observation_counts, start_idx, end_idx]() {
-            for (size_t i = start_idx; i < end_idx; ++i) {
-                int block_idx = blocks_to_update[i];
-                const auto& counts = block_observation_counts.at(block_idx);
-                int ground_count = counts.first;
-                int nonground_count = counts.second;
-
-                // [需求 2.2] 使用互斥锁保证线程安全，这里的锁粒度非常细，只锁单个block
-                std::lock_guard<std::mutex> lock(block_mutex_[block_idx % NUM_BLOCK_MUTEXES]);
-
-                Block* block = blocks_[block_idx];
-                if (block == nullptr) {
-                    continue;
-                }
-
-                // --- 核心更新逻辑 ---
-                if (ground_count > nonground_count) {
-                    block->ground_confidence_log_ += ground_confidence_hit_log_;
-                    updateOccupancyValue(block->occupancy_value_, block->is_free_, prob_hit_log_);
-                    {
-                        std::lock_guard<std::mutex> active_lock(active_indices_mutex_);
-                        updated_ground_block_indices_.insert(block_idx);
-                    }
-                } else if (nonground_count > 0) {
-                    block->ground_confidence_log_ += ground_confidence_miss_log_;            
-                }
-                
-                block->ground_confidence_log_ = std::min(std::max(block->ground_confidence_log_, ground_confidence_min_log_), ground_confidence_max_log_);
-
-                // --- [需求 3.1] 强制层级降级机制 ---
-                if (block->isGroundBlock(ground_confidence_threshold_log_)) {
-                    if (block->layer_ != LayerType::BLOCK) {
-                        block->free_all_voxels(*voxel_pool_);
-                        block->layer_ = LayerType::BLOCK;
-                    }
-                }
-
-                {
-                    std::lock_guard<std::mutex> active_lock(active_indices_mutex_);
-                    if (!block->is_free()) {
-                        active_block_indices_.insert(block_idx);
-                    } else {
-                        active_block_indices_.erase(block_idx);
-                    }
-                }
-            }
-        });
-    }
-
-    // 等待所有线程完成
-    for (auto& thread : threads) {
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
 }
 
 // slide map
@@ -457,31 +348,20 @@ void SOGMMap::resetBlock(int block_idx)
     if (block_idx < 0 || block_idx >= blocks_.size() || blocks_[block_idx] == nullptr) {
         return;
     }
-    
-    // 加锁保护块重置操作，确保多线程安全
-    {
-        std::lock_guard<std::mutex> lock(block_mutex_[block_idx % NUM_BLOCK_MUTEXES]);
-        
-        Block* block = blocks_[block_idx];
-        // 确保块指针有效
-        if (block == nullptr) {
-            return;
-        }
-        // **** 核心改动：将内部的 Voxel 归还到池中 ****
-        block->free_all_voxels(*voxel_pool_);
-        // 重置块的状态
-        block->occupancy_value_ = 0.0f;
-        block->is_free_ = true;
-        block->layer_ = LayerType::BLOCK;
-        // --- [需求 1.1] 重置新增的地面置信度属性 ---
-        block->ground_confidence_log_ = 0.0f;
+    Block* block = blocks_[block_idx];
+    // 确保块指针有效
+    if (block == nullptr) {
+        return;
     }
+    // **** 核心改动：将内部的 Voxel 归还到池中 ****
+    block->free_all_voxels(*voxel_pool_);
+    // 重置块的状态
+    block->occupancy_value_ = 0.0f;
+    block->is_free_ = true;
+    block->layer_ = LayerType::BLOCK;
 
-    // 从活动索引中移除这个块（使用独立的锁保护）
-    {
-        std::lock_guard<std::mutex> active_lock(active_indices_mutex_);
-        active_block_indices_.erase(block_idx);
-    }
+    // 从活动索引中移除这个块
+    active_block_indices_.erase(block_idx);
 }
 
 // main interface
@@ -727,7 +607,7 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
     // 为每个线程的缓存预分配合理空间
     for (auto& cache : thread_caches) {
         cache.local_occ_blocks.reserve(points_per_thread);
-        cache.local_free_blocks.reserve(points_per_thread * 25); // 光线可能穿过多个空闲块
+        cache.local_free_blocks.reserve(points_per_thread * 50); // 光线可能穿过多个空闲块
     }
     
     // ros::Time t1 = ros::Time::now();
@@ -765,14 +645,10 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                     
                     // 使用原子操作检查和设置flag_rayend_标志
                     bool already_marked = false;
-                    bool is_ground_block = false;
                     #pragma omp atomic read
                     already_marked = (flag_rayend_[block_linear_idx] == current_raycast);
-
-                    #pragma omp atomic read
-                    is_ground_block = updated_ground_block_indices_.count(block_linear_idx);
-
-                    if (!already_marked && !is_ground_block) {
+                    
+                    if (!already_marked) {
                         #pragma omp atomic write
                         flag_rayend_[block_linear_idx] = current_raycast;
                         cache.local_occ_blocks.push_back(block_linear_idx);
@@ -807,10 +683,6 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                     
                     int block_linear_idx;
                     blockIdxToLocalLinear(ray_block, block_linear_idx);
-
-                    if (updated_ground_block_indices_.count(block_linear_idx)) {
-                        continue;
-                    }
                     
                     // 标记未命中的块（光线穿过但不是终点）
                     bool already_marked = false;
@@ -850,14 +722,10 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                 
                 // 将未命中的终点块标记为空闲
                 bool already_marked = false;
-                bool is_ground_block = false;
                 #pragma omp atomic read
                 already_marked = (flag_traverse_[block_linear_idx] == current_raycast);
-
-                #pragma omp atomic read
-                is_ground_block = updated_ground_block_indices_.count(block_linear_idx);
                 
-                if (!already_marked && !is_ground_block) {
+                if (!already_marked) {
                     #pragma omp atomic write
                     flag_traverse_[block_linear_idx] = current_raycast;
                     cache.processed_count++;
@@ -874,10 +742,6 @@ void SOGMMap::raycastProcess(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::
                 Eigen::Vector3i ray_block;
                 while (raycaster.step(ray_block)) {
                     blockIdxToLocalLinear(ray_block, block_linear_idx);
-
-                    if (updated_ground_block_indices_.count(block_linear_idx)) {
-                        continue;
-                    }
                     
                     bool already_marked = false;
                     #pragma omp atomic read
@@ -1029,9 +893,6 @@ VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image,
     
     if (!getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max, 
                          sensor_z_min, sensor_z_max, ratio, resolution)) {
-        if (std::max(voxel_z_min, sensor_z_min) > std::min(voxel_z_max, sensor_z_max) + depth_threshold) {
-            return VoxelProjectionStatus::NOT_MATCHED;
-        }
         return VoxelProjectionStatus::INSUFFICIENT_DATA;
     }
 
@@ -1183,20 +1044,7 @@ void SOGMMap::switchLayerWithProject(int block_idx, const Eigen::Vector3d& senso
     }
     
     Block* block = blocks_[block_idx];
-
-    // --- [需求 3.2] 实现层级切换优先级 ---
-    // 1. 最高优先级：检查地面置信度。
-    // 如果一个块被高度确信为地面，则无论距离多近，都应保持其为BLOCK层级，并终止后续的层级切换判断。
-    if (block->isGroundBlock(ground_confidence_threshold_log_)) {
-        // 为确保状态正确，再次检查并设定其为BLOCK层
-        if (block->layer_ != LayerType::BLOCK) {
-            block->free_all_voxels(*voxel_pool_);
-            block->layer_ = LayerType::BLOCK;
-        }
-        return; // 关键：终止函数，不进行后续的距离判断
-    }
     
-    // --- 2. 第二优先级：基于距离的自适应层级 ---
     // 计算块的中心位置
     Eigen::Vector3i block_grid_idx = linearToBlockIdx(block_idx);
     Eigen::Vector3d block_center;
@@ -1359,20 +1207,7 @@ bool SOGMMap::switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen:
     }
     
     Block* block = blocks_[block_idx];
-
-    // --- [需求 3.2] 实现层级切换优先级 ---
-    // 1. 最高优先级：检查地面置信度。
-    if (block->isGroundBlock(ground_confidence_threshold_log_)) {
-        if (block->layer_ != LayerType::BLOCK) {
-            block->free_all_voxels(*voxel_pool_);
-            block->layer_ = LayerType::BLOCK;
-        }
-        // 虽然它是地面，但对于这个函数的调用者来说，可能仍需要知道是否需要更新
-        // 在这种情况下，我们认为地面块是稳定的，不需要进一步的全局更新。
-        return false; // 返回false，表示不需要进行后续的全局更新
-    }
     
-    // --- 2. 第二优先级：基于距离的自适应层级 ---
     // 计算块的中心位置
     Eigen::Vector3i block_grid_idx = linearToBlockIdx(block_idx);
     Eigen::Vector3d block_center;
@@ -1579,6 +1414,7 @@ bool SOGMMap::switchLayerWithProjectWithUpdateGlobal(int block_idx, const Eigen:
 
     return false;
 }
+
 void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image, 
                                                   const Eigen::Matrix3d &R_C_2_W, 
                                                   const Eigen::Vector3d &T_C_2_W) {
@@ -1722,8 +1558,20 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                                                                 voxel_center, LayerType::VOXEL, voxel_res_, 
                                                                                 MIN_VALID_RATIO_VOXEL_, depth_threshold_voxel_);
                             
-                            if (voxel_status != VoxelProjectionStatus::OUT_OF_IMAGE) {
-                                for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
+                            // if (voxel_status != VoxelProjectionStatus::OUT_OF_IMAGE) {
+                            //     for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
+                            //         Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
+                            //         Eigen::Vector3d subvoxel_center;
+                            //         subVoxelIdxToWorld(subvoxel_grid_idx, subvoxel_center);
+                                    
+                            //         VoxelProjectionStatus status = projectVoxelOnce(depth_image, R_W_2_C, T_W_2_C, 
+                            //                                                     subvoxel_center, LayerType::SUBVOXEL, sub_voxel_res_, 
+                            //                                                     MIN_VALID_RATIO_SUB_, depth_threshold_subvoxel_);
+                                    
+                            //         subvoxel_results.push_back({vox_idx, subvox_idx, status});
+                            //     }
+                            // }
+                            for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
                                     Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
                                     Eigen::Vector3d subvoxel_center;
                                     subVoxelIdxToWorld(subvoxel_grid_idx, subvoxel_center);
@@ -1734,7 +1582,6 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     
                                     subvoxel_results.push_back({vox_idx, subvox_idx, status});
                                 }
-                            }
                         }
                     }
                 }
@@ -1759,11 +1606,11 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::MATCHED:
                                     case VoxelProjectionStatus::OCCLUDED:
                                     case VoxelProjectionStatus::BEHIND_CAMERA:
-                                    case VoxelProjectionStatus::OUT_OF_IMAGE:                                    
+                                    case VoxelProjectionStatus::OUT_OF_IMAGE:                                   
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
                                         continue;
-                                    case VoxelProjectionStatus::NOT_MATCHED:
                                     case VoxelProjectionStatus::INSUFFICIENT_DATA:
+                                    case VoxelProjectionStatus::NOT_MATCHED:
                                     default:
                                         updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_miss_log_);
                                         break;
@@ -1786,11 +1633,11 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                         break;
                                     case VoxelProjectionStatus::OCCLUDED:
                                     case VoxelProjectionStatus::BEHIND_CAMERA:
-                                    case VoxelProjectionStatus::OUT_OF_IMAGE:                                    
+                                    case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
                                         continue;
-                                    case VoxelProjectionStatus::NOT_MATCHED:
-                                    case VoxelProjectionStatus::INSUFFICIENT_DATA:
+                                    case VoxelProjectionStatus::INSUFFICIENT_DATA:                                       
+                                    case VoxelProjectionStatus::NOT_MATCHED:                                   
                                     default:
                                         new_value = value + prob_miss_log_;
                                         value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
@@ -1956,9 +1803,9 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::OCCLUDED:                                    
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
-                                    case VoxelProjectionStatus::INSUFFICIENT_DATA:
                                         continue;
-                                    case VoxelProjectionStatus::NOT_MATCHED:                    
+                                    case VoxelProjectionStatus::INSUFFICIENT_DATA:
+                                    case VoxelProjectionStatus::NOT_MATCHED:
                                         updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_miss_log_);
                                         break;
                                     case VoxelProjectionStatus::MATCHED:
@@ -1984,8 +1831,8 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::OCCLUDED:                                    
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
-                                    case VoxelProjectionStatus::INSUFFICIENT_DATA:
                                         continue;
+                                    case VoxelProjectionStatus::INSUFFICIENT_DATA:
                                     case VoxelProjectionStatus::NOT_MATCHED:
                                         {
                                             float new_value = value + prob_miss_log_;
@@ -2354,107 +2201,84 @@ bool SOGMMap::isBlockIdxInMap(const Eigen::Vector3i& block_idx) const {
     return true;
 }
 
-void SOGMMap::getLocalMapState(std::vector<multilayer::VoxelGridMsg>& cells) const
-{
-    cells.clear();
-    // 预估大小，遍历所有块
-    cells.reserve(active_block_indices_.size() * 16);    
+void SOGMMap::getLocalMapState(std::vector<multilayer::VoxelGridMsg>& occupied_cells) const {
+    occupied_cells.clear();
+    // 预估大小，避免多次内存重分配
+    occupied_cells.reserve(active_block_indices_.size() * 16); 
 
-    // --- 关键修正：遍历所有Block，而不仅仅是active_block_indices_ ---
-    for (const int linear_idx : active_block_indices_)
-    {
+    // 不再遍历整个三维空间，而是只遍历被激活的块！
+    // 效率从 O(N*M*K) 降低到 O(ActiveBlockCount)
+    for (const int linear_idx : active_block_indices_) {
+        if (linear_idx < 0 || linear_idx >= blocks_.size() || blocks_[linear_idx] == nullptr) {
+            continue;
+        }
+
         const Block* block = blocks_[linear_idx];
-        if (block == nullptr) {
-            continue;
+
+        // 虽然活动列表里的块理论上不应是free的，但为安全起见再检查一次
+        if (block->is_free()) {
+            continue; 
         }
 
-        // 定义可视化条件
-        const bool is_confident_ground = block->isGroundBlock(ground_confidence_threshold_log_);
-        const bool is_occupied_obstacle = !block->is_free();
+        // 获取块的三维索引，用于后续计算
+        Eigen::Vector3i current_block_idx = linearToBlockIdx(linear_idx);
 
-        // 过滤掉不需可视化的块：即那些既不是障碍物，也不是高置信度地面的空闲块
-        if (!is_occupied_obstacle && !is_confident_ground) {
-            continue;
-        }
-
-        // 如果一个块是高置信度地面，我们总是以BLOCK层级可视化它，并标记为地面
-        if (is_confident_ground) {
-            multilayer::VoxelGridMsg msg;
-            Eigen::Vector3d pos;
-            blockIdxToWorld(linearToBlockIdx(linear_idx), pos);
-            msg.position.x = pos.x();
-            msg.position.y = pos.y();
-            msg.position.z = pos.z();
-            msg.layer = static_cast<uint8_t>(LayerType::BLOCK);
-            msg.is_ground = true; // 明确是地面
-            msg.ground_confidence = 1.0 - 1.0 / (1.0 + std::exp(block->ground_confidence_log_));
-            cells.push_back(msg);
-        }
-        // 否则，它就是一个非地面的障碍物，按其自身层级进行可视化
-        else if (is_occupied_obstacle) {
-            Eigen::Vector3i current_block_idx = linearToBlockIdx(linear_idx);
-            switch (block->layer_)
-            {
-                case LayerType::BLOCK: {
-                    multilayer::VoxelGridMsg msg;
-                    Eigen::Vector3d pos;
-                    blockIdxToWorld(current_block_idx, pos);
-                    msg.position.x = pos.x();
-                    msg.position.y = pos.y();
-                    msg.position.z = pos.z();
-                    msg.layer = static_cast<uint8_t>(LayerType::BLOCK);
-                    msg.is_ground = false; // 明确是障碍物
-                    msg.ground_confidence = 1.0 - 1.0 / (1.0 + std::exp(block->ground_confidence_log_));
-                    cells.push_back(msg);
-                    break;
-                }
-                case LayerType::VOXEL: {
-                    if (block->is_voxel_allocated_) {
-                        for (int i = 0; i < block->voxels_.size(); ++i) {
-                            const Voxel* voxel = block->voxels_[i];
-                            if (voxel != nullptr && !voxel->is_free_) {
-                                multilayer::VoxelGridMsg msg;
-                                Eigen::Vector3i voxel_idx = localLinearToVoxelIdx(i, current_block_idx);
-                                Eigen::Vector3d pos;
-                                voxelIdxToWorld(voxel_idx, pos);
-                                msg.position.x = pos.x();
-                                msg.position.y = pos.y();
-                                msg.position.z = pos.z();
-                                msg.layer = static_cast<uint8_t>(LayerType::VOXEL);
-                                msg.is_ground = false; // Voxel层级的块不可能是高置信度地面
-                                msg.ground_confidence = 1.0 - 1.0 / (1.0 + std::exp(block->ground_confidence_log_));
-                                cells.push_back(msg);
-                            }
+        // 根据Block当前的层级，提取对应分辨率的占据信息
+        switch (block->layer_) {
+            case LayerType::BLOCK: {
+                multilayer::VoxelGridMsg msg;
+                Eigen::Vector3d pos;
+                blockIdxToWorld(current_block_idx, pos);
+                msg.position.x = pos.x();
+                msg.position.y = pos.y();
+                msg.position.z = pos.z();
+                msg.layer = static_cast<uint8_t>(LayerType::BLOCK);
+                occupied_cells.push_back(msg);
+                break;
+            }
+            case LayerType::VOXEL: {
+                if (block->is_voxel_allocated_) {
+                    for (int i = 0; i < block->voxels_.size(); ++i) {
+                        const Voxel* voxel = block->voxels_[i];
+                        if (voxel != nullptr && !voxel->is_free_) {
+                            multilayer::VoxelGridMsg msg;
+                            Eigen::Vector3i voxel_idx = localLinearToVoxelIdx(i, current_block_idx);
+                            Eigen::Vector3d pos;
+                            voxelIdxToWorld(voxel_idx, pos);
+                            msg.position.x = pos.x();
+                            msg.position.y = pos.y();
+                            msg.position.z = pos.z();
+                            msg.layer = static_cast<uint8_t>(LayerType::VOXEL);
+                            occupied_cells.push_back(msg);
                         }
                     }
-                    break;
                 }
-                case LayerType::SUBVOXEL: {
-                    if (block->is_voxel_allocated_) {
-                        for (int i = 0; i < block->voxels_.size(); ++i) {
-                            const Voxel* voxel = block->voxels_[i];
-                            if (voxel != nullptr && voxel->is_subvoxel_allocated_) {
-                                Eigen::Vector3i voxel_idx = localLinearToVoxelIdx(i, current_block_idx);
-                                for (int j = 0; j < voxel->subvoxel_values_.size(); ++j) {
-                                    if (voxel->subvoxel_values_[j] >= min_occupancy_log_) {
-                                        multilayer::VoxelGridMsg msg;
-                                        Eigen::Vector3i subvoxel_idx = localLinearToSubVoxelIdx(j, voxel_idx);
-                                        Eigen::Vector3d pos;
-                                        subVoxelIdxToWorld(subvoxel_idx, pos);
-                                        msg.position.x = pos.x();
-                                        msg.position.y = pos.y();
-                                        msg.position.z = pos.z();
-                                        msg.layer = static_cast<uint8_t>(LayerType::SUBVOXEL);
-                                        msg.is_ground = false; // SubVoxel层级的块不可能是高置信度地面
-                                        msg.ground_confidence = 1.0 - 1.0 / (1.0 + std::exp(block->ground_confidence_log_));
-                                        cells.push_back(msg);
-                                    }
+                break;
+            }
+            case LayerType::SUBVOXEL: {
+                if (block->is_voxel_allocated_) {
+                    for (int i = 0; i < block->voxels_.size(); ++i) {
+                        const Voxel* voxel = block->voxels_[i];
+                        if (voxel != nullptr && voxel->is_subvoxel_allocated_) {
+                            Eigen::Vector3i voxel_idx = localLinearToVoxelIdx(i, current_block_idx);
+                            for (int j = 0; j < voxel->subvoxel_values_.size(); ++j) {
+                                // 检查子体素是否被占据
+                                if (voxel->subvoxel_values_[j] >= min_occupancy_log_) {
+                                    multilayer::VoxelGridMsg msg;
+                                    Eigen::Vector3i subvoxel_idx = localLinearToSubVoxelIdx(j, voxel_idx);
+                                    Eigen::Vector3d pos;
+                                    subVoxelIdxToWorld(subvoxel_idx, pos);
+                                    msg.position.x = pos.x();
+                                    msg.position.y = pos.y();
+                                    msg.position.z = pos.z();
+                                    msg.layer = static_cast<uint8_t>(LayerType::SUBVOXEL);
+                                    occupied_cells.push_back(msg);
                                 }
                             }
                         }
                     }
-                    break;
                 }
+                break;
             }
         }
     }
