@@ -266,7 +266,18 @@ private:
     // 计数器，记录处理的体素数量
     int processed_blocks_count_ = 0;
 
-    
+    // 积分图像
+    cv::Mat depth_integral_;       // 深度值的积分图像
+    cv::Mat depth_squared_integral_; // 深度值平方的积分图像
+    cv::Mat depth_valid_count_;    // 有效像素计数的积分图像
+    bool integral_images_ready_ = false; // 标记积分图像是否已准备好
+     // 预计算积分图像函数
+    void precomputeDepthIntegralImage(const cv::Mat &depth_image);
+    // 使用积分图像的深度统计函数
+    DepthPatchStats getDepthPatchStatsFromIntegral(const cv::Mat &depth_image,
+        int min_u, int max_u, int min_v, int max_v, 
+        double voxel_z_min, double voxel_z_max);
+
     // 多线程处理相关
     int num_projection_threads_;  // 投影使用的线程数
     std::vector<std::mutex> block_mutex_ = std::vector<std::mutex>(NUM_BLOCK_MUTEXES); // 块互斥锁

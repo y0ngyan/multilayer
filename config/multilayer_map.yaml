@@ -24,14 +24,13 @@ OccMap:
   # near_distance_threshold: 20
   # far_distance_threshold: 30
 
-  min_valid_ratio_sub: 0.25
+  min_valid_ratio_sub: 0.3
   min_valid_ratio_voxel: 0.15
   min_valid_ratio_block: 0.2
 
   valid_ratio_base: 1.0       # 基础比例 (理想情况下的valid_ratio)
   valid_ratio_min: 0.1       # 最小比例 (最差情况下的valid_ratio)
-  angle_ratio_min: 0.1        # 角度调制函数的最小因子 C_a
-  distance_decay_rate: 0.05   # 距离衰减系数 k_d
+  distance_decay_rate: 0.15   # 距离衰减系数 k_d
   consistency_factor: 5.0  # 一致性因子 k_c
 
   min_valid_ratio_ratio: 0.1
@@ -111,7 +110,7 @@ DepthCamera:
 
   k_depth_scaling_factor: 1000
   depth_maxdist: 10.0
-  depth_mindist: 0.1
+  depth_mindist: 0.05
   depth_filter_margin: 10
   skip_pixel: 4
 

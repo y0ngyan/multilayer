@@ -244,6 +244,9 @@ void SOGMMap::update(pcl::PointCloud<pcl::PointXYZ> *ptws_hit_ptr, pcl::PointClo
         }
     }
 
+    // 预计算积分图像
+    precomputeDepthIntegralImage(depth_image);
+
     slideMap(camera_pos);
     // ros::Time t1 = ros::Time::now();
     raycastProcess(ptws_hit_ptr, ptws_miss_ptr, camera_pos);
@@ -1617,15 +1620,18 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                 Voxel* voxel = block->voxels_[result.index];
                                 switch (result.status) {
                                     case VoxelProjectionStatus::MATCHED:
+                                        updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_hit_log_);
+                                        break;
                                     case VoxelProjectionStatus::OCCLUDED:
                                     case VoxelProjectionStatus::BEHIND_CAMERA:
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
-                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                     case VoxelProjectionStatus::NO_DATA:
+                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                         continue;
                                     case VoxelProjectionStatus::NOT_MATCHED:
                                     case VoxelProjectionStatus::FREE:
+                                    
                                     default:
                                         updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_miss_log_);
                                         break;
@@ -1649,13 +1655,13 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::OCCLUDED:
                                     case VoxelProjectionStatus::BEHIND_CAMERA:
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
-                                    
+                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
                                     case VoxelProjectionStatus::NO_DATA:
                                         continue;
                                     case VoxelProjectionStatus::NOT_MATCHED:
                                     case VoxelProjectionStatus::FREE:
-                                    case VoxelProjectionStatus::NO_VALID_DATA:
+                                    
                                     default:
                                         new_value = value + prob_miss_log_;
                                         value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
@@ -1786,7 +1792,8 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                             if (voxel_status == VoxelProjectionStatus::MATCHED || 
                                 voxel_status == VoxelProjectionStatus::LESS_VALID_DATA ||
                                 voxel_status == VoxelProjectionStatus::OUT_OF_IMAGE ||
-                                voxel_status == VoxelProjectionStatus::FREE) {
+                                voxel_status == VoxelProjectionStatus::FREE ||
+                                voxel_status == VoxelProjectionStatus::NOT_MATCHED) {
                                 for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
                                     Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
                                     Eigen::Vector3d subvoxel_center;
@@ -1799,13 +1806,13 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     subvoxel_results.push_back({vox_idx, subvox_idx, status});
                                 }
                             }
-                            else if(voxel_status == VoxelProjectionStatus::NOT_MATCHED){
-                                for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
-                                    Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
-                                    Eigen::Vector3d subvoxel_center;
-                                    subvoxel_results.push_back({vox_idx, subvox_idx, voxel_status});
-                                }
-                            }
+                            // else if(){
+                            //     for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
+                            //         Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
+                            //         Eigen::Vector3d subvoxel_center;
+                            //         subvoxel_results.push_back({vox_idx, subvox_idx, voxel_status});
+                            //     }
+                            // }
                         }
                     }
                 }
@@ -1831,11 +1838,12 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::OCCLUDED:                                
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
-                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                     case VoxelProjectionStatus::NO_DATA:
+                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                         continue;
                                     case VoxelProjectionStatus::NOT_MATCHED:
                                     case VoxelProjectionStatus::FREE:
+                                    
                                         updateOccupancyValue(voxel->occupancy_value_, voxel->is_free_, prob_miss_log_);
                                         break;
                                     case VoxelProjectionStatus::MATCHED:
@@ -1862,13 +1870,12 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::OCCLUDED:
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
-                                    
                                     case VoxelProjectionStatus::NO_DATA:
-                                    
+                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                         continue;
                                     case VoxelProjectionStatus::NOT_MATCHED:
                                     case VoxelProjectionStatus::FREE:
-                                    case VoxelProjectionStatus::NO_VALID_DATA:
+                                    
                                         {
                                             float new_value = value + prob_miss_log_;
                                             value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
@@ -1981,18 +1988,150 @@ void SOGMMap::computeAngularBounds(const Eigen::Vector3d& center_camera, double 
     while (max_azimuth > M_PI) max_azimuth -= 2 * M_PI;
 }
 
+DepthPatchStats SOGMMap::getDepthPatchStatsFromIntegral(const cv::Mat &depth_image,
+    int min_u, int max_u, int min_v, int max_v, 
+    double voxel_z_min, double voxel_z_max) {
+    
+    DepthPatchStats stats = {};
+    
+    // 确保坐标在图像范围内
+    min_u = std::max(0, min_u);
+    max_u = std::min(max_u, depth_width_ - 1);
+    min_v = std::max(0, min_v);
+    max_v = std::min(max_v, depth_height_ - 1);
+    
+    // 使用积分图像计算区域统计值
+    double sum = depth_integral_.at<double>(max_v+1, max_u+1) 
+               - depth_integral_.at<double>(max_v+1, min_u)
+               - depth_integral_.at<double>(min_v, max_u+1)
+               + depth_integral_.at<double>(min_v, min_u);
+               
+    double squared_sum = depth_squared_integral_.at<double>(max_v+1, max_u+1)
+                       - depth_squared_integral_.at<double>(max_v+1, min_u)
+                       - depth_squared_integral_.at<double>(min_v, max_u+1)
+                       + depth_squared_integral_.at<double>(min_v, min_u);
+                       
+    int valid_count = depth_valid_count_.at<int>(max_v+1, max_u+1)
+                    - depth_valid_count_.at<int>(max_v+1, min_u)
+                    - depth_valid_count_.at<int>(min_v, max_u+1)
+                    + depth_valid_count_.at<int>(min_v, min_u);
+    
+    // 计算统计值
+    if (valid_count == 0) {
+        stats.has_valid_data = false;
+        return stats;
+    }
+    
+    stats.has_valid_data = true;
+    stats.total_pixels = (max_u - min_u + 1) * (max_v - min_v + 1);
+    stats.valid_pixels = valid_count;
+    stats.mean_depth = sum / valid_count;
+    
+    // 计算标准差
+    double variance = (squared_sum / valid_count) - (stats.mean_depth * stats.mean_depth);
+    stats.std_dev = std::sqrt(std::max(0.0, variance));  // 确保不会因为浮点误差而产生负值
+    
+    // 对于min_depth和max_depth，以及在体素深度范围内的像素数量
+    // 这些需要实际扫描区域，但我们可以使用稀疏采样来提高效率
+    
+    // 采样步长
+    int patch_width = max_u - min_u + 1;
+    int patch_height = max_v - min_v + 1;
+    int total_pixels_in_patch = patch_width * patch_height;
+    // 根据总体素数量自适应选择采样比例
+    double sampling_ratio;
+    if (total_pixels_in_patch <= 50) {
+        sampling_ratio = 1.0; // 极小范围：全采样
+    } else if (total_pixels_in_patch <= 100) {
+        sampling_ratio = 0.64;  // 小范围：高采样率
+    } else if (total_pixels_in_patch <= 500) {
+        sampling_ratio = 0.32;  // 中等范围：中等采样率
+    } else if (total_pixels_in_patch <= 1000) {
+        sampling_ratio = 0.24; // 大范围：低采样率
+    } else {
+        sampling_ratio = 0.16; // 超大范围：很低采样率
+    }
+    
+    // 计算采样步长
+    int target_sample_count = static_cast<int>(total_pixels_in_patch * sampling_ratio);
+    target_sample_count = std::max(target_sample_count, 1);
+    
+    double target_samples_per_dim = sqrt(static_cast<double>(target_sample_count));
+    int step_u = std::max(1, static_cast<int>(patch_width / target_samples_per_dim + 0.5));
+    int step_v = std::max(1, static_cast<int>(patch_height / target_samples_per_dim + 0.5));
+    
+    step_u = std::min(step_u, patch_width);
+    step_v = std::min(step_v, patch_height);
+    
+    // 初始化深度极值
+    double min_depth = std::numeric_limits<double>::max();
+    double max_depth = std::numeric_limits<double>::lowest();
+    int in_range_count = 0;
+    int row_offset = 0;
+    
+    // 采样计算极值和在体素范围内的像素数
+    for (int v = min_v; v <= max_v; v += step_v) {
+        if (v < 0 || v >= depth_height_) continue;
+        
+        const uint16_t* row_ptr = depth_image.ptr<uint16_t>(v);
+        int start_u = min_u + (row_offset % step_u);
+        
+        for (int u = start_u; u <= max_u; u += step_u) {
+            if (u < 0 || u >= depth_width_) continue;
+            
+            double pixel_depth = static_cast<double>(row_ptr[u]) * inv_depth_scaling_factor_;
+            
+            if (pixel_depth > depth_mindist_ && pixel_depth < depth_maxdist_) {
+                min_depth = std::min(min_depth, pixel_depth);
+                max_depth = std::max(max_depth, pixel_depth);
+                
+                if (pixel_depth >= voxel_z_min && pixel_depth <= voxel_z_max) {
+                    in_range_count++;
+                }
+            }
+        }
+        row_offset++;
+    }
+    
+    // 如果采样没有找到有效深度，使用均值和标准差估计
+    if (min_depth == std::numeric_limits<double>::max()) {
+        min_depth = stats.mean_depth - 3 * stats.std_dev;
+        max_depth = stats.mean_depth + 3 * stats.std_dev;
+        
+        // 限制在有效深度范围内
+        min_depth = std::max(min_depth, depth_mindist_);
+        max_depth = std::min(max_depth, depth_maxdist_);
+    }
+    
+    stats.min_depth = min_depth;
+    stats.max_depth = max_depth;
+    
+    // 估计在体素深度范围内的像素数量
+    double total_samples = std::ceil((patch_width * 1.0) / step_u) * std::ceil((patch_height * 1.0) / step_v);
+    if (total_samples > 0) {
+        double in_range_ratio = in_range_count / total_samples;
+        stats.valid_pixels = static_cast<int>(valid_count * in_range_ratio);
+    }
+    stats.valid_pixel_ratio = static_cast<double>(stats.valid_pixels) / valid_count;
+    
+    return stats;
+}
+
 DepthPatchStats SOGMMap::getDepthPatchStats(const cv::Mat &depth_image,
                                          int min_u, int max_u, int min_v, int max_v,
                                          double voxel_z_min, double voxel_z_max) {
+    
+    // 如果积分图像已准备好，使用积分图像版本
+    if (integral_images_ready_) {
+        return getDepthPatchStatsFromIntegral(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max);
+    }
+
     DepthPatchStats stats = {};
     
     // 步骤 1: 执行高效的自适应采样
     int patch_width = max_u - min_u + 1;
     int patch_height = max_v - min_v + 1;
     int total_pixels_in_patch = patch_width * patch_height;
-
-    std::vector<double> valid_depths;
-    std::vector<double> all_depths;
     
     // 根据总体素数量自适应选择采样比例
     double sampling_ratio;
@@ -2018,6 +2157,10 @@ DepthPatchStats SOGMMap::getDepthPatchStats(const cv::Mat &depth_image,
     
     step_u = std::min(step_u, patch_width);
     step_v = std::min(step_v, patch_height);
+    
+    // 预分配内存，避免push_back的重复分配
+    std::vector<double> total_depths;
+    total_depths.reserve(target_sample_count);
 
     int row_offset = 0;
     
@@ -2032,13 +2175,10 @@ DepthPatchStats SOGMMap::getDepthPatchStats(const cv::Mat &depth_image,
             
             double pixel_depth = static_cast<double>(row_ptr[u]) * inv_depth_scaling_factor_;
             
-            // 收集所有深度值用于统计
-            all_depths.push_back(pixel_depth);
-            stats.total_pixels++;
-            
             // 检查是否为有效深度
             if (pixel_depth > depth_mindist_ && pixel_depth < depth_maxdist_) {
-                valid_depths.push_back(pixel_depth);
+                stats.total_pixels++;
+                total_depths.push_back(pixel_depth);
                 
                 // 检查是否在体素深度范围内
                 if (pixel_depth > voxel_z_min && pixel_depth < voxel_z_max) {
@@ -2050,7 +2190,7 @@ DepthPatchStats SOGMMap::getDepthPatchStats(const cv::Mat &depth_image,
     }
 
     // 计算统计信息
-    if (valid_depths.empty()) {
+    if (total_depths.empty()) {
         stats.has_valid_data = false;
         return stats;
     }
@@ -2058,20 +2198,20 @@ DepthPatchStats SOGMMap::getDepthPatchStats(const cv::Mat &depth_image,
     stats.has_valid_data = true;
     
     // 计算最小值和最大值
-    auto minmax_it = std::minmax_element(valid_depths.begin(), valid_depths.end());
+    auto minmax_it = std::minmax_element(total_depths.begin(), total_depths.end());
     stats.min_depth = *minmax_it.first;
     stats.max_depth = *minmax_it.second;
     
     // 计算平均值
-    double sum = std::accumulate(valid_depths.begin(), valid_depths.end(), 0.0);
-    stats.mean_depth = sum / valid_depths.size();
+    double sum = std::accumulate(total_depths.begin(), total_depths.end(), 0.0);
+    stats.mean_depth = sum / total_depths.size();
     
     // 计算标准差
     double variance = 0.0;
-    for (const auto& depth : valid_depths) {
+    for (const auto& depth : total_depths) {
         variance += (depth - stats.mean_depth) * (depth - stats.mean_depth);
     }
-    stats.std_dev = std::sqrt(variance / valid_depths.size());
+    stats.std_dev = std::sqrt(variance / total_depths.size());
     
     // 计算有效像素比率
     stats.valid_pixel_ratio = static_cast<double>(stats.valid_pixels) / stats.total_pixels;
@@ -2625,4 +2765,66 @@ bool SOGMMap::createDirectoryIfNotExists(const std::string& path) {
     
     std::cout << "[SemanticKITTI] Successfully created directory: " << path << std::endl;
     return true;
+}
+
+void SOGMMap::precomputeDepthIntegralImage(const cv::Mat &depth_image) {
+    // 创建积分图像，尺寸为 (rows+1) x (cols+1)
+    depth_integral_.create(depth_image.rows+1, depth_image.cols+1, CV_64F);
+    depth_squared_integral_.create(depth_image.rows+1, depth_image.cols+1, CV_64F);
+    depth_valid_count_.create(depth_image.rows+1, depth_image.cols+1, CV_32S);
+    
+    // 初始化第一行和第一列为0
+    for(int x = 0; x <= depth_image.cols; ++x) {
+        depth_integral_.at<double>(0, x) = 0;
+        depth_squared_integral_.at<double>(0, x) = 0;
+        depth_valid_count_.at<int>(0, x) = 0;
+    }
+    for(int y = 1; y <= depth_image.rows; ++y) {
+        depth_integral_.at<double>(y, 0) = 0;
+        depth_squared_integral_.at<double>(y, 0) = 0;
+        depth_valid_count_.at<int>(y, 0) = 0;
+    }
+    
+    // 计算积分图像
+    for(int y = 0; y < depth_image.rows; ++y) {
+        const uint16_t* row_ptr = depth_image.ptr<uint16_t>(y);
+        
+        for(int x = 0; x < depth_image.cols; ++x) {
+            double pixel_depth = static_cast<double>(row_ptr[x]) * inv_depth_scaling_factor_;
+            
+            // 上一行的累积值
+            double prev_sum = depth_integral_.at<double>(y, x+1);
+            double prev_sum_squared = depth_squared_integral_.at<double>(y, x+1);
+            int prev_count = depth_valid_count_.at<int>(y, x+1);
+            
+            // 左侧单元格的累积值
+            double left_sum = depth_integral_.at<double>(y+1, x);
+            double left_sum_squared = depth_squared_integral_.at<double>(y+1, x);
+            int left_count = depth_valid_count_.at<int>(y+1, x);
+            
+            // 左上角单元格的累积值(需要减去，因为在prev_sum和left_sum中被重复计算)
+            double diag_sum = depth_integral_.at<double>(y, x);
+            double diag_sum_squared = depth_squared_integral_.at<double>(y, x);
+            int diag_count = depth_valid_count_.at<int>(y, x);
+            
+            // 当前像素的值
+            double curr_sum = 0;
+            double curr_sum_squared = 0;
+            int curr_count = 0;
+            
+            // 检查是否为有效深度
+            if (pixel_depth > depth_mindist_ && pixel_depth < depth_maxdist_) {
+                curr_sum = pixel_depth;
+                curr_sum_squared = pixel_depth * pixel_depth;
+                curr_count = 1;
+            }
+            
+            // 更新积分图像
+            depth_integral_.at<double>(y+1, x+1) = prev_sum + left_sum - diag_sum + curr_sum;
+            depth_squared_integral_.at<double>(y+1, x+1) = prev_sum_squared + left_sum_squared - diag_sum_squared + curr_sum_squared;
+            depth_valid_count_.at<int>(y+1, x+1) = prev_count + left_count - diag_count + curr_count;
+        }
+    }
+    
+    integral_images_ready_ = true;
 }
