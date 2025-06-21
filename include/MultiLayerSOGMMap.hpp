@@ -48,9 +48,11 @@ enum class LayerType : uint8_t
 enum class VoxelProjectionStatus {
     BEHIND_CAMERA,      // 在相机后方
     OUT_OF_IMAGE,       // 超出图像范围
-    INSUFFICIENT_DATA,  // 深度数据不足
+    NO_DATA,
+    NO_VALID_DATA,  
     LESS_VALID_DATA,
     OCCLUDED,          // 被遮挡
+    FREE,              // 空闲（在深度图中但没有测量值）
     MATCHED,           // 匹配（在深度图中且深度一致）
     NOT_MATCHED        // 不匹配（在深度图中但深度不一致）
 
@@ -150,6 +152,18 @@ struct SubVoxelProjectionResult {
     VoxelProjectionStatus status;
 };
 
+// 返回一个包含统计结果的结构体，更清晰
+struct DepthPatchStats {
+    double min_depth;
+    double max_depth;
+    double mean_depth;
+    double std_dev;
+    double valid_pixel_ratio;
+    int total_pixels;
+    int valid_pixels;
+    bool has_valid_data;
+};
+
 static const int NUM_BLOCK_MUTEXES = 32; // 块互斥锁数量
 static int file_sequence_number = 0; // 文件序列号，用于文件命名
 
@@ -218,6 +232,13 @@ private:
     double depth_threshold_voxel_;
     double depth_threshold_block_;
 
+    double valid_ratio_base_;
+    double valid_ratio_min_;
+    double angle_ratio_min_;
+    double angle_power_;
+    double distance_decay_rate_;
+    double consistency_factor_;
+
     // 添加相机内参作为成员变量
     double fx_, fy_, cx_, cy_;
     int depth_width_, depth_height_;
@@ -280,9 +301,12 @@ private:
                                int min_u, int max_u, int min_v, int max_v,
                                double voxel_z_min, double voxel_z_max,
                                double& sensor_z_min, double& sensor_z_max,
-                               double& ratio,
-                               double resolution);
-
+                               int& valid_pixels,
+                               int& total_pixels,
+                               double height);
+    DepthPatchStats getDepthPatchStats(const cv::Mat &depth_image,
+                                            int min_u, int max_u, int min_v, int max_v,
+                                            double voxel_z_min, double voxel_z_max);
     // 多分辨率投影与更新方法
     void switchLayerWithProject(int block_idx, const Eigen::Vector3d& sensor_pos, 
                           const cv::Mat& depth_image,
@@ -310,6 +334,7 @@ private:
                                                double valid_ratio,
                                                double depth_threshold);
     double getAdaptiveValidRatio(double distance, LayerType layer) const;
+    double getAdaptiveValidRatio(double distance, double normalized_std_dev) const;
     
     // 辅助函数
     bool createDirectoryIfNotExists(const std::string& path);

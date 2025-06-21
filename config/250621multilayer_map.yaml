@@ -24,19 +24,20 @@ OccMap:
   # near_distance_threshold: 20
   # far_distance_threshold: 30
 
-  min_valid_ratio_sub: 0.25
+  min_valid_ratio_sub: 0.1
   min_valid_ratio_voxel: 0.15
   min_valid_ratio_block: 0.2
 
-  valid_ratio_base: 1.0       # 基础比例 (理想情况下的valid_ratio)
+  valid_ratio_base: 0.9       # 基础比例 (理想情况下的valid_ratio)
   valid_ratio_min: 0.1       # 最小比例 (最差情况下的valid_ratio)
   angle_ratio_min: 0.1        # 角度调制函数的最小因子 C_a
-  distance_decay_rate: 0.05   # 距离衰减系数 k_d
+  angle_power: 1.0            # 角度调制的指数 p
+  distance_decay_rate: 0.15   # 距离衰减系数 k_d
   consistency_factor: 5.0  # 一致性因子 k_c
 
   min_valid_ratio_ratio: 0.1
 
-  depth_threshold_subvoxel: 0.0           # 体素z距离与像素平均值距离比较阈值
+  depth_threshold_subvoxel: -0.01           # 体素z距离与像素平均值距离比较阈值
   depth_threshold_voxel: 0.0        # 体素z距离与体素平均值距离比较阈值
   depth_threshold_block: 0.0            # 体素z距离与体素平均值距离比较阈值
 

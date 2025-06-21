@@ -67,6 +67,8 @@ void SOGMMap::init(std::string filename)
 
     valid_ratio_base_ = (double)(OccMap_node["valid_ratio_base"]);
     valid_ratio_min_ = (double)(OccMap_node["valid_ratio_min"]);
+    angle_ratio_min_ = (double)(OccMap_node["angle_ratio_min"]);
+    angle_power_ = (double)(OccMap_node["angle_power"]);
     distance_decay_rate_ = (double)(OccMap_node["distance_decay_rate"]);
     consistency_factor_ = (double)(OccMap_node["consistency_factor"]);
     
@@ -879,6 +881,9 @@ VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image,
     double radius = half_res * sqrt(3.0);
     double min_azimuth, max_azimuth, min_elevation, max_elevation;
     computeAngularBounds(center_camera, distance, radius, min_azimuth, max_azimuth, min_elevation, max_elevation);
+
+    valid_ratio = valid_ratio * getAdaptiveValidRatio(distance, layer_type);
+    // valid_ratio = valid_ratio * getAdaptiveValidRatio(distance, center_camera);
     
     int min_u, min_v, max_u, max_v;
     polarToPixel(min_azimuth, min_elevation, min_u, min_v);
@@ -900,46 +905,162 @@ VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image,
     min_v = std::max(0, std::min(min_v, depth_height_ - 1));
     max_v = std::max(0, std::min(max_v, depth_height_ - 1));
 
-    // === 步骤 3: 获取传感器深度区间和统计信息 ===
-    DepthPatchStats stats = getDepthPatchStats(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max);
-    
-    if (!stats.has_valid_data || stats.total_pixels == 0) {
+    // === 步骤 3: 获取传感器深度区间 ===
+    double sensor_z_min, sensor_z_max;
+    int valid_pixels = 0;
+    int total_pixels = 0;
+
+    getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max, 
+                         sensor_z_min, sensor_z_max, valid_pixels, total_pixels, voxel_center.z());
+    // DepthPatchStats stats = getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max);
+    // double center_depth = center_camera.z(); // 使用体素中心深度进行归一化
+    // double normalized_std_dev = (center_depth > 1e-3) ? (stats.std_dev / center_depth) : stats.std_dev;
+    // double adaptive_ratio = getAdaptiveValidRatio(distance, normalized_std_dev);
+    // valid_ratio = valid_ratio * adaptive_ratio;
+    // std::cout << "Adaptive valid ratio: " << valid_ratio << std::endl;
+
+    double ratio = static_cast<double>(valid_pixels) / total_pixels;
+
+    // === 步骤 4: 同时判断状态 ===
+    if (total_pixels == 0) {
         return VoxelProjectionStatus::NO_DATA;
     }
-
+    
     // 判断是否被遮挡：体素完全在传感器测量值之后
-    if (voxel_z_min > stats.max_depth + depth_threshold) {
+    if (voxel_z_min > sensor_z_max + depth_threshold) {
         return VoxelProjectionStatus::OCCLUDED;
     }
 
     // 判断是否为空闲：体素完全在传感器测量值之前
-    if (voxel_z_max < stats.min_depth - depth_threshold) {
+    if (voxel_z_max < sensor_z_min - depth_threshold) {
         return VoxelProjectionStatus::FREE;
     }
 
-     if (stats.valid_pixels == 0) {
+    // // 判断是否被遮挡：体素完全在传感器测量值之后
+    // if (voxel_z_min > stats.max_depth + depth_threshold) {
+    //     return VoxelProjectionStatus::OCCLUDED;
+    // }
+
+    // // 判断是否为空闲：体素完全在传感器测量值之前
+    // if (voxel_z_max < stats.min_depth - depth_threshold) {
+    //     return VoxelProjectionStatus::FREE;
+    // }
+
+    if (valid_pixels == 0) {
         return VoxelProjectionStatus::NO_VALID_DATA;
     }
-    
-    // === 步骤 4: 计算自适应有效比率 ===
-    // double center_depth = center_camera.z(); // 使用体素中心深度进行归一化
-    // double normalized_std_dev = (center_depth > 1e-3) ? (stats.std_dev / center_depth) : stats.std_dev;
-    double adaptive_ratio = getAdaptiveValidRatio(distance, stats.std_dev);
-    double final_valid_ratio = valid_ratio * adaptive_ratio;
 
-    // === 步骤 5: 判断数据量少和是否匹配投影状态 ===
-    if (stats.valid_pixel_ratio < final_valid_ratio) {
+    if (ratio < valid_ratio) {
         return VoxelProjectionStatus::LESS_VALID_DATA;
     }
+    
+
+    // if (stats.valid_pixel_ratio < valid_ratio) {
+    //     return VoxelProjectionStatus::LESS_VALID_DATA;
+    // }
 
     // 判断是否匹配：体素深度区间与传感器深度区间有重叠
-    if (std::max(voxel_z_min, stats.min_depth) <= std::min(voxel_z_max, stats.max_depth) + depth_threshold) {
+    if (std::max(voxel_z_min, sensor_z_min) <= std::min(voxel_z_max, sensor_z_max) + depth_threshold) {
         return VoxelProjectionStatus::MATCHED;
     }
+    // if (std::max(voxel_z_min, stats.min_depth) <= std::min(voxel_z_max, stats.max_depth) + depth_threshold) {
+    //     return VoxelProjectionStatus::MATCHED;
+    // }
 
     // 否则就是不匹配
     return VoxelProjectionStatus::NOT_MATCHED;
 }
+
+// VoxelProjectionStatus SOGMMap::projectVoxelOnce(const cv::Mat &depth_image, 
+//                                                const Eigen::Matrix3d &R_W_2_C,
+//                                                const Eigen::Vector3d &T_W_2_C, 
+//                                                const Eigen::Vector3d &voxel_center,
+//                                                const LayerType layer_type,
+//                                                double resolution,
+//                                                double valid_ratio,
+//                                                double depth_threshold) {
+//     // === 步骤 1: 计算体素在相机坐标系下的深度区间 ===
+//     Eigen::Vector3d center_camera = R_W_2_C * voxel_center + T_W_2_C;
+
+//     // 如果体素中心在相机后方，直接返回
+//     if (center_camera.z() <= 0) {
+//         return VoxelProjectionStatus::BEHIND_CAMERA;
+//     }
+
+//     // 使用解析法计算深度区间
+//     double half_res = resolution / 2.0;
+//     const Eigen::RowVector3d& Rz_row = R_W_2_C.row(2);
+//     double extent = half_res * (Rz_row.lpNorm<1>());
+//     double voxel_z_min = center_camera.z() - extent;
+//     double voxel_z_max = center_camera.z() + extent;
+    
+//     // === 步骤 2: 计算投影范围并检查是否在图像内 ===
+//     double distance = center_camera.norm();
+//     double radius = half_res * sqrt(3.0);
+//     double min_azimuth, max_azimuth, min_elevation, max_elevation;
+//     computeAngularBounds(center_camera, distance, radius, min_azimuth, max_azimuth, min_elevation, max_elevation);
+    
+//     int min_u, min_v, max_u, max_v;
+//     polarToPixel(min_azimuth, min_elevation, min_u, min_v);
+//     polarToPixel(max_azimuth, max_elevation, max_u, max_v);
+    
+//     if (min_u >= max_u || min_v >= max_v) {
+//         return VoxelProjectionStatus::OUT_OF_IMAGE;
+//     }
+
+//     if (layer_type == LayerType::SUBVOXEL && 
+//         (min_u < 0 || max_u >= depth_width_ || 
+//          min_v < 0 || max_v >= depth_height_)) {
+//         return VoxelProjectionStatus::OUT_OF_IMAGE;
+//     }
+
+//     // 限制像素坐标在深度图尺寸内
+//     min_u = std::max(0, std::min(min_u, depth_width_ - 1));
+//     max_u = std::max(0, std::min(max_u, depth_width_ - 1));
+//     min_v = std::max(0, std::min(min_v, depth_height_ - 1));
+//     max_v = std::max(0, std::min(max_v, depth_height_ - 1));
+
+//     // === 步骤 3: 获取传感器深度区间和统计信息 ===
+//     DepthPatchStats stats = getDepthInterval(depth_image, min_u, max_u, min_v, max_v, voxel_z_min, voxel_z_max);
+    
+//     if (!stats.has_valid_data || stats.total_pixels == 0) {
+//         return VoxelProjectionStatus::NO_DATA;
+//     }
+    
+//     // === 步骤 4: 计算自适应有效比率 ===
+//     double center_depth = center_camera.z(); // 使用体素中心深度进行归一化
+//     double normalized_std_dev = (center_depth > 1e-3) ? (stats.std_dev / center_depth) : stats.std_dev;
+//     double adaptive_ratio = getAdaptiveValidRatio(distance, normalized_std_dev);
+//     double final_valid_ratio = valid_ratio * adaptive_ratio;
+
+//     // === 步骤 5: 判断投影状态 ===
+    
+//     // 判断是否被遮挡：体素完全在传感器测量值之后
+//     if (voxel_z_min > stats.max_depth + depth_threshold) {
+//         return VoxelProjectionStatus::OCCLUDED;
+//     }
+
+//     // 判断是否为空闲：体素完全在传感器测量值之前
+//     if (voxel_z_max < stats.min_depth - depth_threshold) {
+//         return VoxelProjectionStatus::FREE;
+//     }
+
+//     if (stats.valid_pixels == 0) {
+//         return VoxelProjectionStatus::NO_VALID_DATA;
+//     }
+
+//     if (stats.valid_pixel_ratio < final_valid_ratio) {
+//         return VoxelProjectionStatus::LESS_VALID_DATA;
+//     }
+
+//     // 判断是否匹配：体素深度区间与传感器深度区间有重叠
+//     if (std::max(voxel_z_min, stats.min_depth) <= std::min(voxel_z_max, stats.max_depth) + depth_threshold) {
+//         return VoxelProjectionStatus::MATCHED;
+//     }
+
+//     // 否则就是不匹配
+//     return VoxelProjectionStatus::NOT_MATCHED;
+// }
 
 // 修改：更新占据值的辅助函数，使其既可以增加也可以减少
 void SOGMMap::updateOccupancyValue(float &value, bool &is_free, float update) {
@@ -1786,7 +1907,7 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                             if (voxel_status == VoxelProjectionStatus::MATCHED || 
                                 voxel_status == VoxelProjectionStatus::LESS_VALID_DATA ||
                                 voxel_status == VoxelProjectionStatus::OUT_OF_IMAGE ||
-                                voxel_status == VoxelProjectionStatus::FREE) {
+                                    voxel_status == VoxelProjectionStatus::FREE) {
                                 for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
                                     Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
                                     Eigen::Vector3d subvoxel_center;
@@ -1799,13 +1920,25 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     subvoxel_results.push_back({vox_idx, subvox_idx, status});
                                 }
                             }
-                            else if(voxel_status == VoxelProjectionStatus::NOT_MATCHED){
+                            else if (voxel_status == VoxelProjectionStatus::NOT_MATCHED ){
                                 for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
                                     Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
                                     Eigen::Vector3d subvoxel_center;
-                                    subvoxel_results.push_back({vox_idx, subvox_idx, voxel_status});
+                                    subVoxelIdxToWorld(subvoxel_grid_idx, subvoxel_center);
+                                    subvoxel_results.push_back({vox_idx, subvox_idx, VoxelProjectionStatus::NOT_MATCHED});
                                 }
                             }
+                            // for (int subvox_idx = 0; subvox_idx < voxel->subvoxel_values_.size(); ++subvox_idx) {
+                            //     Eigen::Vector3i subvoxel_grid_idx = localLinearToSubVoxelIdx(subvox_idx, voxel_grid_idx);
+                            //     Eigen::Vector3d subvoxel_center;
+                            //     subVoxelIdxToWorld(subvoxel_grid_idx, subvoxel_center);
+                                
+                            //     VoxelProjectionStatus status = projectVoxelOnce(depth_image, R_W_2_C, T_W_2_C, 
+                            //                                                 subvoxel_center, LayerType::SUBVOXEL, sub_voxel_res_, 
+                            //                                                 MIN_VALID_RATIO_SUB_, depth_threshold_subvoxel_);
+                                
+                            //     subvoxel_results.push_back({vox_idx, subvox_idx, status});
+                            // }
                         }
                     }
                 }
@@ -1862,13 +1995,11 @@ void SOGMMap::voxelPolarProjectionProcessWithRaycast(const cv::Mat &depth_image,
                                     case VoxelProjectionStatus::OUT_OF_IMAGE:
                                     case VoxelProjectionStatus::OCCLUDED:
                                     case VoxelProjectionStatus::LESS_VALID_DATA:
-                                    
+                                    case VoxelProjectionStatus::NO_VALID_DATA:
                                     case VoxelProjectionStatus::NO_DATA:
-                                    
                                         continue;
                                     case VoxelProjectionStatus::NOT_MATCHED:
-                                    case VoxelProjectionStatus::FREE:
-                                    case VoxelProjectionStatus::NO_VALID_DATA:
+                                    case VoxelProjectionStatus::FREE:                                    
                                         {
                                             float new_value = value + prob_miss_log_;
                                             value = std::min(std::max(new_value, clamp_min_log_), clamp_max_log_);
@@ -2010,7 +2141,7 @@ DepthPatchStats SOGMMap::getDepthPatchStats(const cv::Mat &depth_image,
     
     // 计算采样步长
     int target_sample_count = static_cast<int>(total_pixels_in_patch * sampling_ratio);
-    target_sample_count = std::max(target_sample_count, 1);
+    target_sample_count = std::max(target_sample_count, 4);
     
     double target_samples_per_dim = sqrt(static_cast<double>(target_sample_count));
     int step_u = std::max(1, static_cast<int>(patch_width / target_samples_per_dim + 0.5));
